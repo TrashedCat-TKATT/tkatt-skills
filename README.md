@@ -1,25 +1,33 @@
 # tkatt-skills — a native Horizon mod
 
-Banks experience into a bar you hold, turns it into skill points, and spends
-those points on four trees and three toggleable big skills. A framework for skill trees rather than a finished
-game: add a tree in `runtime.rs` and one effect hook, and the UI, points and
-persistence come with it.
+Banks experience from a bar in the corner, turns it into skill points, and
+spends them in a skill screen: four trees and three toggleable big skills. A
+framework for skill trees rather than a finished game: add a tree in
+`runtime.rs` and one effect hook, and the UI, points and persistence come with
+it.
 
 MIT. Not made or endorsed by the Horizon project.
 
 ## What it does
 
 - **The bar** sits in the bottom-left corner: `XP n%` on the left, the points
-  you can spend on the right, filled as experience banks.
-- **Hold left mouse on the bar** to bank experience. It takes 2 XP a tick from
+  you can spend on the right, filled as experience banks. It is display only:
+  a click on it is an ordinary click on the world.
+- **The skill key** (K by default, rebindable in Options → Mods) opens the
+  **skill screen**, centred over the dimmed world with the pointer free. It is
+  a real game screen: single-player is not paused, and Escape, K or **Done**
+  closes it.
+- **In the screen**, two tabs switch between the **Combat** trees (Melee,
+  Armour, Bulwark) and the **Gathering** ones (Fist, Mining Speed, Fortune,
+  Haste). A click on a row selects it; a second click on the same row — or the
+  footer button — spends: level up, unlock, turn on/off or rank up. Hovering a
+  row shows what it gives and what one more costs.
+- **Hold Bank XP** in the screen to bank experience. It takes 2 XP a tick from
   your own experience (through the vanilla `experience add` command, so levels,
   the bar and other players agree), fills the bar, and grants a **skill point**
-  every 100 XP. Releasing stops it; the bank keeps what it has.
-- **The skill key** (K by default, rebindable in Options → Mods) opens the tree
-  panel under the bar. Click a row's **+** to spend a point, or to unlock and
-toggle a big skill.
-- **`/skills`** shows the trees and toggles the panel; **`/skills reset`** clears
-  every tree and keeps your points.
+  every 100 XP. Letting go stops it; the bank keeps what it has.
+- **`/skills`** shows the trees; **`/skills reset`** clears every tree and keeps
+  your points.
 - The state is written to the mod's own settings folder
   (`horizon-mods/.horizon-mod-data/tkatt_skills/state`), so it survives a
   restart, per game instance. The mod's id is `tkatt_skills`; it was
@@ -33,13 +41,13 @@ toggle a big skill.
 | Melee damage | +8% damage | 10 (+80%) | `Game::melee_damage` amount, scaled |
 | Armour | +0.5 armour points | 10 (+5) | flat points taken off every hit |
 | Bulwark | +25% damage cut a rank | 3 (+75%) | after armour points, that share of the rest is cut |
-| Fist mining | one pickaxe tier | 4 | bare hand mines and drops like wood/stone/iron/diamond |
+| Fist mining | one pickaxe tier | 5 | bare hand mines and drops like wood/stone/iron/diamond/netherite |
 | Mining speed | +50% mining speed a rank | 3 ranks | every block you break, up to +150% |
 | Fortune | 25% a rank | 3 ranks | one more of the block's first drop, up to 75% |
 | Haste | Haste II and up | 3 ranks | 200 ticks of Haste each break, one level a rank |
 
 Fist tiers: level 1 mines like a wooden pickaxe (2.0 speed), 2 stone (4.0),
-3 iron (6.0), 4 diamond (8.0) — on the blocks vanilla tags
+3 iron (6.0), 4 diamond (8.0), 5 netherite (9.0) — on the blocks vanilla tags
 `minecraft:mineable/pickaxe`, and a block's `needs_*_tool` tag is satisfied up
 to your tier, so stone drops to a level-2 fist.
 
@@ -49,9 +57,8 @@ all. A hit of 8 with 5 armour points lands as 3, or as 2.25 with one Bulwark
 rank.
 
 The last three rows are big skills. Each has three ranks; a rank costs points
-(the tuning sets how many, one by default). A plain click on the row's `+`
-unlocks the first rank and then switches the skill on and off; Shift-click buys
-the next rank.
+(the tuning sets how many, one by default). The footer's button unlocks the
+first rank, then switches the skill on and off; **Rank up** buys the next rank.
 
 Their numbers are not in the code: they live in the mod's data folder in a file
 called `tuning`, next to `state`, and `/skills tune` changes them in game. The
@@ -83,7 +90,7 @@ a tree:
 - `/skills level <tree> <n>` sets one row outright, with `melee`, `armour`
   (or `armor`), `bulwark`, `fist`, `mining`, `fortune` or `haste` and clamping
   to the
-  row's end: `/skills level fist 4` is a diamond fist, `/skills level armour 99`
+  row's end: `/skills level fist 5` is a netherite fist, `/skills level armour 99`
   is level 10, and `/skills level fortune 1` unlocks rank 1 of Fortune.
 - `/skills tune` shows the modifiers' numbers; `/skills tune <row> <field>
   <value>` changes one. Fields: `melee damage`, `armour points`, `bulwark cut`,
@@ -98,11 +105,13 @@ instead of changing anything.
 
 | Input | Action |
 | --- | --- |
-| Hold LMB on the bar | bank experience |
-| K (rebindable in Options → Mods) | open/close the tree panel |
-| LMB on a row's `+` | spend a point, or unlock and toggle a big skill |
-| Shift + LMB on a big skill's `+` | buy its next rank |
-| `/skills`, `/skills reset` | status and panel, or reset the trees |
+| K (rebindable in Options → Mods) | open/close the skill screen |
+| LMB on a tab | switch between Combat and Gathering |
+| LMB on a row | select it |
+| LMB on the selected row, or the footer button | level up, unlock, turn on/off, rank up |
+| Hold LMB on **Bank XP** | bank experience |
+| Escape, K or **Done** | close the screen |
+| `/skills`, `/skills reset` | status, or reset the trees |
 | `/skills points <n>` | add skill points (for testing) |
 | `/skills level <tree> <n>` | set a tree's level, clamped to its end (for testing) |
 
@@ -123,21 +132,23 @@ The bundle is a `horizon-mixins` source bundle pinned to one Horizon Nightly:
   game's facts and the stored `tuning`.
 
 It uses Horizon's stable hook points by name (`hud`, `key`, `tick`, `mods`,
-`settings`, `settings_click`, `command`, all API 1) plus the game-function
+`settings`, `settings_click`, `command`, all API 1) and the screen hooks
+(`screen_render_post`, `screen_mouse_button_pressed_pre`,
+`screen_mouse_button_released_pre`) plus the game-function
 hooks that need the pin: `Game::melee_damage` (MODIFY_VARIABLE),
 `Game::mob_hits_player` and `Game::hurt_player_by` (MODIFY_ARG on the amount),
 and six hooks on the game's own mining code (the `progress` local and
 `speed` store in `destroy_progress`, `correct_tool`/`harvest` and the
 loot list's `drops` store in
 `break_block_as_player` for Fortune, and a HEAD on `break_block_as_player` for
-Haste), plus a cancellable HEAD on `Game::attack`. Fall, fire, lava and the other environmental sources
+Haste). Fall, fire, lava and the other environmental sources
 are deliberately untouched: those bodies carry `?`, so reducing them would mean
 cancelling and re-applying the damage, which skips any other mod's hooks inside
 those functions. Armour therefore covers the two damage paths that take a value
 argument.
 
 The `mods` hook (`list.rs`) gives the mod its own row in Options → Mods, and
-that page lists the panel key as a rebindable row of the same kind the Key
+that page lists the screen key as a rebindable row of the same kind the Key
 Binds screen uses. K is only the default: rebind "Open skill trees" there and
 `native_mod_key` reads the player's choice. The vanilla Key Binds screen is a
 fixed table of the game's own mappings, so a mod's key lives on its page
@@ -170,14 +181,14 @@ built in an instance of their own.
 
 ## Verified and not
 
-Verified here: the mod's 19 unit tests (banking, points, spending, unlocking,
+Verified here: the mod's 20 unit tests (banking, points, spending, unlocking,
 ranking and toggling a big skill, the effect formulas and their tuning, armour
-points and the ranked Bulwark cut, the
-mining factor, the fist-drop rule, Fortune's roll and target, both storage lines, the box's layout and hit-testing, `/skills`
-text, the test commands' parsing and clamping, and that a click on the box is
-not an attack), and
-`horizon-mixins plan` resolving all 17 injections, 1 module and their bindings
-against the pinned Horizon source.
+points and the ranked Bulwark cut, the mining factor, the fist-drop rule,
+Fortune's roll and target, both storage lines, the bar's drawing, the screen's
+layout and hit-testing, select-then-spend, the emblem and its tier fallbacks,
+`/skills` text and the test commands' parsing and clamping), and
+`horizon-mixins apply` resolving all 18 injections, 1 module and their
+bindings against the pinned Horizon source.
 
 Also verified: the staged, patched client compiles (`cargo check -p
 horizon-client --no-default-features`) with no errors and no warnings from the
@@ -190,8 +201,11 @@ build needs a GPU/display and Horizon's prepared resources from a real
 Minecraft 26.3 copy, neither of which is here. Compilation passing does not
 prove the numbers feel right: check the fist tier at each level in game.
 
-A click that lands on the box never swings at or mines what is behind it: the
-cancellable HEAD on `Game::attack` returns `Break(false)` whenever the pointer
-is on the drawn box, which is the whole panel while it is open, not just the
-`+` boxes. The cost is that the box's corner of the screen is not an attack
-surface while playing.
+The screen is opened with `native_mod_screen_open`, so the game itself frees
+the pointer, keeps the world running and puts the screen on its stack (Escape
+works as it does anywhere). While it is open, the mod cancels the presses and
+releases it uses; a click outside the panel is left to the game. The bar in the
+world takes no clicks at all, so the corner of the screen stays an attack
+surface while playing. The fist's emblem is uploaded into the mod's own image
+slot once per open and drawn from there; if the upload fails, the row falls
+back to the pickaxe of the tier bought.

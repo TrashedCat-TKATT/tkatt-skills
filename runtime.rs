@@ -12,7 +12,7 @@ pub const ID: &str = "tkatt_skills";
 /// on the first launch under the new id, so a rename loses no progress.
 pub const LEGACY_ID: &str = "skill_trees";
 pub const NAME: &str = "tkatt-skills";
-pub const VERSION: &str = "0.1.0";
+pub const VERSION: &str = "0.2.0";
 pub const DESCRIPTION: &str = "Bank experience into a bar for skill points, then spend them on melee damage, armour, mining with your fists, or big skills like mining speed, Fortune and Haste. A framework for skill trees.";
 
 /// One skill point per this much banked experience.
@@ -31,12 +31,12 @@ pub const WARD_CUT_MAX: f32 = 0.9;
 pub const BULWARK_MAX: u32 = 3;
 /// Every tree but the fist one stops here.
 pub const MAX_LEVEL: u32 = 10;
-/// Fist tiers: none, wood, stone, iron, diamond.
-pub const FIST_MAX: u32 = 4;
+/// Fist tiers: none, wood, stone, iron, diamond, netherite.
+pub const FIST_MAX: u32 = 5;
 /// The pickaxe speed a fist of each tier mines at (vanilla's materials).
-pub const FIST_SPEEDS: [f32; 5] = [1.0, 2.0, 4.0, 6.0, 8.0];
+pub const FIST_SPEEDS: [f32; 6] = [1.0, 2.0, 4.0, 6.0, 8.0, 9.0];
 /// The tiers' names, for the panel and the command.
-pub const FIST_TIERS: [&str; 5] = ["Bare", "Wooden", "Stone", "Iron", "Diamond"];
+pub const FIST_TIERS: [&str; 6] = ["Bare", "Wooden", "Stone", "Iron", "Diamond", "Netherite"];
 
 /// The colours the box draws with, in the HUD's alpha-red-green-blue order.
 pub const BACKGROUND: u32 = 0x7800_0000;
@@ -44,12 +44,9 @@ pub const FILL: u32 = 0xFF2E_7D32;
 pub const READY: u32 = 0xFF55_FF55;
 pub const INK: u32 = 0xFFFF_FFFF;
 pub const DIM: u32 = 0xFFA0_A0A0;
-pub const INK_DARK: u32 = 0x0014_1414;
 
 /// The bar, and the panel under it, in GUI pixels.
 pub const BAR: (f32, f32) = (182.0, 12.0);
-pub const PANEL_Y: f32 = 14.0;
-pub const ROW: f32 = 18.0;
 /// Four levelled trees (melee, armour, bulwark, fist), then three big skills.
 pub const ROWS: usize = 7;
 /// The big skills' rows, in panel order.
@@ -312,10 +309,6 @@ impl Field {
         }
     }
 }
-pub const PANEL: (f32, f32) = (182.0, 2.0 + ROWS as f32 * ROW);
-/// The "+" box on a row, from the panel's left edge.
-pub const PLUS: f32 = 12.0;
-pub const PLUS_X: f32 = 166.0;
 
 /// The rows, in the order the panel lists them: four levelled trees, then
 /// three big skills.
@@ -386,7 +379,7 @@ impl Tree {
             Tree::Melee | Tree::Armor => MAX_LEVEL,
             // Each Bulwark rank adds another cut.
             Tree::Bulwark => BULWARK_MAX,
-            // A fist tier is 0..=4: bare, wood, stone, iron, diamond.
+            // A fist tier is 0..=5: bare, wood, stone, iron, diamond, netherite.
             Tree::Fist => FIST_MAX,
             // A big skill: one point a rank, three ranks.
             _ => BIG_MAX,
@@ -652,11 +645,6 @@ impl Skills {
         value || self.fist_tier() > 0 && self.fist_covers(needed)
     }
 
-    /// The bar's fill, 0..=1.
-    pub fn fill(&self) -> f32 {
-        (self.bank / XP_PER_POINT).clamp(0.0, 1.0)
-    }
-
     /// The stored form, one line:
     /// `2|bank|points|melee|armor|bulwark|fist|spent|mining|fortune|haste|b1|b2|b3`.
     /// Version 1 had no Bulwark row; `decode` still reads those lines.
@@ -755,10 +743,18 @@ thread_local! {
     static STATE: std::cell::RefCell<Option<Skills>> = const { std::cell::RefCell::new(None) };
     /// The tunable big-skill numbers, read from the same folder once.
     static TUNE: std::cell::Cell<Option<Tune>> = const { std::cell::Cell::new(None) };
-    /// The panel open, the bar held (this client's own view).
-    static UI: std::cell::Cell<(bool, bool)> = const { std::cell::Cell::new((false, false)) };
-    /// Where the box was drawn this frame, in GUI pixels.
-    static ORIGIN: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((0.0, 0.0)) };
+    /// The screen's branch, its selected row and whether Bank is held.
+    static SCREEN: std::cell::Cell<ScreenState> = const {
+        std::cell::Cell::new(ScreenState {
+            branch: Branch::Combat,
+            selected: Some(MELEE_ROW),
+            banking: false,
+        })
+    };
+    /// What the screen's `&self` hooks leave for the tick to say or play.
+    static NOTES: std::cell::RefCell<Vec<Note>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Whether the emblem made it into the atlas this session.
+    static ICON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The mod is on in Options > Mods (on until a hook first sees it off).
     static ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// The old id's files were looked at this session.
@@ -842,58 +838,21 @@ pub fn set_carried() {
     CARRIED.with(|c| c.set(true));
 }
 
-/// The panel open, the bar held.
-pub fn ui() -> (bool, bool) {
-    UI.with(|c| c.get())
-}
+// The in-world bar and the skill screen's layout, state and click rules.
+//
+// The bar is display only: it shows the bank and the points, and nothing on it
+// takes a click. Everything the player does happens in the screen, where the
+// pointer is free: pick a branch, pick a node, then use the footer button (or
+// click the same node again) to spend, unlock, rank or toggle.
 
-pub fn set_ui(open: bool, holding: bool) {
-    UI.with(|c| c.set((open, holding)));
-}
-
-/// Where the box was drawn this frame, for hit-testing the player's clicks.
-pub fn origin() -> (f32, f32) {
-    ORIGIN.with(|c| c.get())
-}
-
-pub fn set_origin(at: (f32, f32)) {
-    ORIGIN.with(|c| c.set(at));
-}
-
-/// What the box draws this frame.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct View {
+/// What the in-world bar shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BarView {
     pub bank: f32,
     pub points: u32,
-    pub levels: [u32; ROWS],
-    pub big: [u8; BIG_ROWS],
-    /// The points a rank of each big skill costs.
-    pub costs: [u32; BIG_ROWS],
-    /// Each big skill's last rank.
-    pub maxes: [u32; BIG_ROWS],
-    /// The tree panel is open under the bar.
-    pub open: bool,
-    /// The bar is being held: it draws lighter.
-    pub holding: bool,
 }
 
-impl View {
-    pub fn of(skills: &Skills, open: bool, holding: bool) -> Self {
-        let tune = tuning();
-        Self {
-            bank: skills.bank,
-            points: skills.points,
-            levels: skills.levels,
-            big: skills.big,
-            costs: [tune.mining_cost, tune.fortune_cost, tune.haste_cost],
-            maxes: [tune.mining_tier, tune.fortune_tier, tune.haste_tier],
-            open,
-            holding,
-        }
-    }
-}
-
-/// One thing to draw, relative to the box's top left corner.
+/// One thing the bar draws, relative to its top left corner.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
     /// x, y, w, h and argb.
@@ -902,142 +861,751 @@ pub enum Shape {
     Text(String, [f32; 2], u32, bool),
 }
 
-/// What a click at a point (in the box's own pixels) hit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Hit {
-    /// The bar: hold it to bank experience.
-    Bar,
-    /// The "+" of the tree on this row.
-    Spend(usize),
-}
-
-/// The box's size this frame.
-pub fn size(v: &View) -> (f32, f32) {
-    if v.open {
-        (PANEL.0, PANEL_Y + PANEL.1)
-    } else {
-        BAR
-    }
-}
-
-/// A row's effect text.
-fn row_text(i: usize, v: &View) -> String {
-    let tree = TREES[i];
-    if tree.is_big() {
-        let cost = v.costs[i - BIG_MINING];
-        return if v.levels[i] == 0 {
-            format!(
-                "{}  {} point{}",
-                tree.title(),
-                cost,
-                if cost == 1 { "" } else { "s" }
-            )
-        } else {
-            let on = v.big[i - BIG_MINING] == 1;
-            format!(
-                "{}  {}/{}  {}",
-                tree.title(),
-                v.levels[i].min(v.maxes[i - BIG_MINING]),
-                v.maxes[i - BIG_MINING],
-                if on { "on" } else { "off" }
-            )
-        };
-    }
-    let level = v.levels[i].min(tree.max());
-    if level >= tree.max() {
-        format!("{}  {}/{}  max", tree.title(), level, tree.max())
-    } else {
-        format!(
-            "{}  {}/{}  {}",
-            tree.title(),
-            level,
-            tree.max(),
-            tree.per_level(tuning())
-        )
-    }
-}
-
-/// The bar and, when open, the three tree rows under it.
-pub fn shapes(v: &View) -> Vec<Shape> {
+/// The bar in its corner: the bank's fill, `XP n%`, the points waiting.
+pub fn bar(v: &BarView) -> Vec<Shape> {
     let (w, h) = BAR;
-    let mut out = Vec::with_capacity(20);
+    let mut out = Vec::with_capacity(4);
     out.push(Shape::Fill([0.0, 0.0, w, h], BACKGROUND));
     let filled = (w - 2.0) * (v.bank / XP_PER_POINT).clamp(0.0, 1.0);
     if filled > 0.0 {
-        out.push(Shape::Fill(
-            [1.0, 1.0, filled, h - 2.0],
-            if v.holding { READY } else { FILL },
-        ));
+        out.push(Shape::Fill([1.0, 1.0, filled, h - 2.0], FILL));
     }
     let label = format!("XP {:>3}%", (v.bank / XP_PER_POINT * 100.0).round() as u32);
     out.push(Shape::Text(label, [3.0, 2.0], INK, true));
-    let points = format!("{} point{}", v.points, if v.points == 1 { "" } else { "s" });
+    let points = format!(
+        "{} point{}",
+        v.points,
+        if v.points == 1 { "" } else { "s" }
+    );
     let width = points.len() as f32 * 6.0;
-    out.push(Shape::Text(points, [w - width - 3.0, 2.0], INK, true));
-    if !v.open {
-        return out;
-    }
-    out.push(Shape::Fill([0.0, PANEL_Y, PANEL.0, PANEL.1], BACKGROUND));
-    for i in 0..ROWS {
-        let y = PANEL_Y + 1.0 + i as f32 * ROW;
-        let ready = if TREES[i].is_big() {
-            // Unlocked and on, or one point away from unlocking.
-            v.levels[i] > 0 && v.big[i - BIG_MINING] == 1 || v.levels[i] == 0 && v.points > 0
-        } else {
-            v.points > 0 && v.levels[i] < TREES[i].max()
-        };
-        out.push(Shape::Text(
-            row_text(i, v),
-            [3.0, y + 4.0],
-            if ready { READY } else { INK },
-            true,
-        ));
-        out.push(Shape::Fill(
-            [PLUS_X, y + 3.0, PLUS, PLUS],
-            if ready { FILL } else { DIM },
-        ));
-        out.push(Shape::Text("+".to_owned(), [PLUS_X + 3.0, y + 4.0], INK, false));
-    }
+    out.push(Shape::Text(
+        points,
+        [w - width - 3.0, 2.0],
+        if v.points > 0 { READY } else { INK },
+        true,
+    ));
     out
 }
 
-/// What a click at `at`, local to the box, does: the bar takes the whole
-/// first row, each tree its "+" box.
-pub fn hit(v: &View, at: (f32, f32)) -> Option<Hit> {
-    let (x, y) = at;
-    if x < 0.0 || x >= PANEL.0 {
-        return None;
-    }
-    if y >= 0.0 && y < BAR.1 {
-        return Some(Hit::Bar);
-    }
-    if !v.open {
-        return None;
-    }
-    let top = PANEL_Y + 1.0;
-    if y < top || y >= top + ROWS as f32 * ROW {
-        return None;
-    }
-    let row = ((y - top) / ROW) as usize;
-    (x >= PLUS_X && x < PLUS_X + PLUS).then_some(Hit::Spend(row.min(ROWS - 1)))
+/// Which half of the tree the screen shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Branch {
+    Combat,
+    Gathering,
 }
 
-/// Whether a click at `cursor` (GUI pixels) is the box's, and so must not
-/// also swing at the world. Hit-testing the pointer, rather than remembering
-/// the last press, means the order of the click and the key hook's own event
-/// cannot matter.
-pub fn blocks_attack(
-    skills: &Skills,
-    open: bool,
-    holding: bool,
-    origin: (f32, f32),
-    cursor: (f32, f32),
-) -> bool {
-    let (x, y) = (cursor.0 - origin.0, cursor.1 - origin.1);
-    let (w, h) = size(&View::of(skills, open, holding));
-    // The whole box, not just the bar and the "+" boxes: anywhere on it is
-    // the interface's, including a row's label while the panel is open.
-    x >= 0.0 && y >= 0.0 && x < w && y < h
+/// The rows, by index in `TREES`.
+pub const MELEE_ROW: usize = 0;
+pub const ARMOUR_ROW: usize = 1;
+pub const BULWARK_ROW: usize = 2;
+pub const FIST_ROW: usize = 3;
+
+/// The combat branch's rows, in the order the screen lists them.
+pub const COMBAT_ROWS: [usize; 3] = [MELEE_ROW, ARMOUR_ROW, BULWARK_ROW];
+/// The gathering branch's rows: the fist tier, then the three big skills.
+pub const GATHERING_ROWS: [usize; 4] = [FIST_ROW, BIG_MINING, BIG_MINING + 1, BIG_MINING + 2];
+
+impl Branch {
+    pub const ALL: [Branch; 2] = [Branch::Combat, Branch::Gathering];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Branch::Combat => "Combat",
+            Branch::Gathering => "Gathering",
+        }
+    }
+
+    /// The tree rows of this branch, in the order the screen lists them.
+    pub fn rows(self) -> &'static [usize] {
+        match self {
+            Branch::Combat => &COMBAT_ROWS,
+            Branch::Gathering => &GATHERING_ROWS,
+        }
+    }
+}
+
+/// What the screen remembers between frames.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScreenState {
+    pub branch: Branch,
+    /// The row selected in that branch.
+    pub selected: Option<usize>,
+    /// The Bank button is held down.
+    pub banking: bool,
+}
+
+impl Default for ScreenState {
+    fn default() -> Self {
+        Self {
+            branch: Branch::Combat,
+            selected: Some(MELEE_ROW),
+            banking: false,
+        }
+    }
+}
+
+/// The screen's own state.
+pub fn screen() -> ScreenState {
+    SCREEN.with(|c| c.get())
+}
+
+pub fn set_screen(s: ScreenState) {
+    SCREEN.with(|c| c.set(s));
+}
+
+/// The state a freshly opened screen starts in: combat, its first node.
+pub fn open_screen() {
+    set_screen(ScreenState::default());
+}
+
+/// Stops banking, on close.
+pub fn close_screen() {
+    let mut s = screen();
+    s.banking = false;
+    set_screen(s);
+}
+
+/// Something a `&self` hook wants said, played or done, kept for the tick.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Note {
+    /// A line in the action bar.
+    Bar(String),
+    /// A sound at the player: its name, volume and pitch.
+    Sound(&'static str, f32, f32),
+    /// The screen is done: close it.
+    Close,
+}
+
+pub fn note(n: Note) {
+    NOTES.with(|q| q.borrow_mut().push(n));
+}
+
+/// Takes what the screen's hooks left for the tick to say or do.
+pub fn take_notes() -> Vec<Note> {
+    NOTES.with(|q| std::mem::take(&mut *q.borrow_mut()))
+}
+
+/// Whether the emblem uploaded into the atlas this session.
+pub fn icon_ready() -> bool {
+    ICON.with(|c| c.get())
+}
+
+pub fn set_icon_ready(ok: bool) {
+    ICON.with(|c| c.set(ok));
+}
+
+/// The button press sound.
+pub const CLICK: &str = "minecraft:ui.button.click";
+
+/// The screen, in GUI pixels. 300x200 fits vanilla's 320x240 smallest GUI.
+pub const SCREEN_W: f32 = 300.0;
+pub const SCREEN_H: f32 = 200.0;
+const SCREEN_BG: u32 = 0xF0_14_14_14;
+const SCREEN_EDGE: u32 = 0xFF_00_00_00;
+const SCREEN_INNER: u32 = 0xFF_36_36_36;
+const ROW_HOVER: u32 = 0xFF_26_26_26;
+const ROW_SELECTED: u32 = 0xFF_33_33_33;
+const NODE_BOX: u32 = 0xFF_26_26_26;
+const NODE_INNER: u32 = 0xFF_1B_1B1B;
+const ACCENT: u32 = 0xFF_FF_FF_55;
+const GOOD: u32 = 0xFF_7C_FC_7C;
+
+/// The two branch tabs' boxes.
+pub const TAB_RECTS: [[f32; 4]; 2] = [[10.0, 46.0, 78.0, 18.0], [10.0, 68.0, 78.0, 18.0]];
+pub const BANK_RECT: [f32; 4] = [212.0, 18.0, 78.0, 16.0];
+pub const DONE_RECT: [f32; 4] = [10.0, 176.0, 60.0, 18.0];
+pub const ACTION_RECT: [f32; 4] = [174.0, 176.0, 116.0, 18.0];
+pub const TOGGLE_RECT: [f32; 4] = [106.0, 176.0, 64.0, 18.0];
+pub const NODE_TOP: f32 = 46.0;
+pub const NODE_PITCH: f32 = 28.0;
+
+/// Where the panel's top left corner is, for a window `rect`.
+pub fn panel_origin(rect: [f32; 4]) -> [f32; 2] {
+    [
+        ((rect[2] - SCREEN_W) / 2.0).floor(),
+        ((rect[3] - SCREEN_H) / 2.0).floor(),
+    ]
+}
+
+/// A row's clickable strip.
+pub fn row_rect(i: usize) -> [f32; 4] {
+    [
+        90.0,
+        NODE_TOP + i as f32 * NODE_PITCH,
+        SCREEN_W - 90.0 - 10.0,
+        NODE_PITCH,
+    ]
+}
+
+/// Where row `i`'s icon, label and effect are drawn, panel-local.
+pub fn icon_at(i: usize) -> [f32; 2] {
+    [96.0, NODE_TOP + 1.0 + i as f32 * NODE_PITCH]
+}
+
+pub fn label_at(i: usize) -> [f32; 2] {
+    [126.0, NODE_TOP + 2.0 + i as f32 * NODE_PITCH]
+}
+
+pub fn effect_at(i: usize) -> [f32; 2] {
+    [126.0, NODE_TOP + 13.0 + i as f32 * NODE_PITCH]
+}
+
+/// What the screen draws this frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenView {
+    pub bank: f32,
+    pub points: u32,
+    pub levels: [u32; ROWS],
+    pub big: [u8; BIG_ROWS],
+    pub costs: [u32; BIG_ROWS],
+    pub maxes: [u32; BIG_ROWS],
+    pub tune: Tune,
+    pub state: ScreenState,
+    /// The pointer, panel-local, for hover highlights.
+    pub mouse: [f32; 2],
+}
+
+impl ScreenView {
+    pub fn of(skills: &Skills, state: ScreenState, mouse: [f32; 2]) -> Self {
+        let tune = tuning();
+        Self {
+            bank: skills.bank,
+            points: skills.points,
+            levels: skills.levels,
+            big: skills.big,
+            costs: [tune.mining_cost, tune.fortune_cost, tune.haste_cost],
+            maxes: [tune.mining_tier, tune.fortune_tier, tune.haste_tier],
+            tune,
+            state,
+            mouse,
+        }
+    }
+
+    /// A big skill's rank, clamped to its tuned end; 0 for a levelled tree.
+    pub fn rank(&self, row: usize) -> u32 {
+        if row >= BIG_MINING {
+            self.levels[row].min(self.maxes[row - BIG_MINING])
+        } else {
+            0
+        }
+    }
+
+    /// Whether the big skill on `row` is switched on.
+    pub fn on(&self, row: usize) -> bool {
+        row >= BIG_MINING && self.rank(row) > 0 && self.big[row - BIG_MINING] == 1
+    }
+
+    /// What one level or rank of `row` costs.
+    pub fn cost(&self, row: usize) -> u32 {
+        if row >= BIG_MINING {
+            self.costs[row - BIG_MINING]
+        } else {
+            1
+        }
+    }
+}
+
+/// One thing the screen draws, panel-local.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ScreenShape {
+    Fill([f32; 4], u32),
+    Text(String, [f32; 2], u32, bool),
+    /// Text whose right edge is at x.
+    TextRight(String, f32, f32, u32, bool),
+    /// Text centred in the panel at y.
+    TextCenter(String, f32, u32, bool),
+    Button {
+        label: String,
+        rect: [f32; 4],
+        enabled: bool,
+        hovered: bool,
+    },
+    /// A vanilla item icon at a point, `size` pixels square.
+    Icon(&'static str, [f32; 2], f32),
+    /// The mod's own emblem, from the atlas slot `horizon/modimage`.
+    Emblem([f32; 2], f32),
+}
+
+/// What a point in the panel hit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenHit {
+    Tab(usize),
+    Node(usize),
+    Bank,
+    Done,
+    /// The one footer button: level up, unlock, or turn a big skill on/off.
+    Action,
+    /// The big skill's turn-on/off button.
+    Toggle,
+    /// The big skill's rank-up button.
+    Rank,
+}
+
+/// What a node's main action is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Level,
+    Unlock,
+    Toggle,
+    Rank,
+}
+
+fn inside(rect: [f32; 4], at: [f32; 2]) -> bool {
+    at[0] >= rect[0]
+        && at[1] >= rect[1]
+        && at[0] < rect[0] + rect[2]
+        && at[1] < rect[1] + rect[3]
+}
+
+/// What a click at `at` (panel-local) hits, if anything.
+pub fn hit(v: &ScreenView, at: [f32; 2]) -> Option<ScreenHit> {
+    if !inside([0.0, 0.0, SCREEN_W, SCREEN_H], at) {
+        return None;
+    }
+    for (i, rect) in TAB_RECTS.iter().enumerate() {
+        if inside(*rect, at) {
+            return Some(ScreenHit::Tab(i));
+        }
+    }
+    for (i, row) in v.state.branch.rows().iter().enumerate() {
+        if inside(row_rect(i), at) {
+            return Some(ScreenHit::Node(*row));
+        }
+    }
+    if inside(BANK_RECT, at) {
+        return Some(ScreenHit::Bank);
+    }
+    if inside(DONE_RECT, at) {
+        return Some(ScreenHit::Done);
+    }
+    let rank_shown = v
+        .state
+        .selected
+        .is_some_and(|row| TREES[row].is_big() && v.rank(row) > 0);
+    if rank_shown {
+        if inside(TOGGLE_RECT, at) {
+            return Some(ScreenHit::Toggle);
+        }
+        if inside(ACTION_RECT, at) {
+            return Some(ScreenHit::Rank);
+        }
+    } else if v.state.selected.is_some() && inside(ACTION_RECT, at) {
+        return Some(ScreenHit::Action);
+    }
+    None
+}
+
+/// The selected node's main action, or None when it is finished.
+pub fn primary(v: &ScreenView, row: usize) -> Option<Action> {
+    if TREES[row].is_big() {
+        if v.rank(row) == 0 {
+            Some(Action::Unlock)
+        } else {
+            Some(Action::Toggle)
+        }
+    } else if v.levels[row] < TREES[row].max() {
+        Some(Action::Level)
+    } else {
+        None
+    }
+}
+
+/// Whether the points are there for `row`'s next level or rank.
+pub fn affordable(v: &ScreenView, row: usize) -> bool {
+    v.points >= v.cost(row)
+}
+
+/// A row's progress, as the row and the tooltip show it.
+pub fn progress(v: &ScreenView, row: usize) -> String {
+    let tree = TREES[row];
+    if tree.is_big() {
+        let max = v.maxes[row - BIG_MINING];
+        if v.rank(row) == 0 {
+            format!("0/{max}")
+        } else {
+            format!(
+                "{}/{max} {}",
+                v.rank(row),
+                if v.on(row) { "on" } else { "off" }
+            )
+        }
+    } else {
+        format!("{}/{}", v.levels[row], tree.max())
+    }
+}
+
+/// What a row gives now.
+pub fn effect(v: &ScreenView, row: usize) -> String {
+    match row {
+        MELEE_ROW => format!(
+            "+{:.0}% damage",
+            v.tune.melee_step * v.levels[row] as f32 * 100.0
+        ),
+        ARMOUR_ROW => format!(
+            "+{:.1} armour",
+            v.tune.armor_points * v.levels[row] as f32
+        ),
+        BULWARK_ROW => format!(
+            "-{:.0}% damage taken",
+            v.tune.ward_step * v.levels[row] as f32 * 100.0
+        ),
+        FIST_ROW => format!(
+            "{} fists",
+            FIST_TIERS[v.levels[row].min(FIST_MAX) as usize].to_lowercase()
+        ),
+        row if row == BIG_MINING => format!("+{}% mining speed", 50 * v.rank(row)),
+        row if row == BIG_MINING + 1 => format!("{}% extra drop", 25 * v.rank(row)),
+        _ => format!("{} Haste", if v.on(row) { "gives" } else { "no" }),
+    }
+}
+
+/// The line under a row's progress in the tooltip: what one more buys.
+pub fn next_line(v: &ScreenView, row: usize) -> String {
+    let tree = TREES[row];
+    if tree.is_big() {
+        if v.rank(row) == 0 {
+            format!(
+                "Unlock for {} point{}",
+                v.cost(row),
+                if v.cost(row) == 1 { "" } else { "s" }
+            )
+        } else if v.rank(row) < v.maxes[row - BIG_MINING] {
+            format!(
+                "Next rank for {} point{}",
+                v.cost(row),
+                if v.cost(row) == 1 { "" } else { "s" }
+            )
+        } else {
+            "Last rank".to_owned()
+        }
+    } else if v.levels[row] < tree.max() {
+        format!("Next: {} for 1 point", tree.per_level(v.tune))
+    } else {
+        "Maxed".to_owned()
+    }
+}
+
+/// The hovered row's vanilla tooltip.
+pub fn tooltip(v: &ScreenView, row: usize) -> Vec<String> {
+    vec![
+        TREES[row].title().to_owned(),
+        progress(v, row),
+        effect(v, row),
+        String::new(),
+        next_line(v, row),
+    ]
+}
+
+/// The row the pointer is over, if any.
+pub fn hovered(v: &ScreenView) -> Option<usize> {
+    for (i, row) in v.state.branch.rows().iter().enumerate() {
+        if inside(row_rect(i), v.mouse) {
+            return Some(*row);
+        }
+    }
+    None
+}
+
+/// The headline button's label.
+fn primary_label(v: &ScreenView, row: usize) -> String {
+    match primary(v, row) {
+        Some(Action::Level) => "Level up — 1 pt".to_owned(),
+        Some(Action::Unlock) => format!("Unlock — {} pt", v.cost(row)),
+        Some(Action::Toggle) => {
+            if v.on(row) {
+                "Turn off".to_owned()
+            } else {
+                "Turn on".to_owned()
+            }
+        }
+        Some(Action::Rank) => format!("Rank up — {} pt", v.cost(row)),
+        None => "Maxed".to_owned(),
+    }
+}
+
+/// The footer's line: what the selected node is.
+fn footer(v: &ScreenView, row: usize) -> String {
+    format!("{} — {}", TREES[row].title(), effect(v, row))
+}
+
+/// The tab, node and button shapes of the whole screen.
+pub fn screen_shapes(v: &ScreenView, emblem: bool) -> Vec<ScreenShape> {
+    let mut out = Vec::with_capacity(48);
+    // The panel, its shadow and its border.
+    out.push(ScreenShape::Fill(
+        [2.0, 2.0, SCREEN_W, SCREEN_H],
+        0x60_00_00_00,
+    ));
+    out.push(ScreenShape::Fill([0.0, 0.0, SCREEN_W, SCREEN_H], SCREEN_EDGE));
+    out.push(ScreenShape::Fill(
+        [1.0, 1.0, SCREEN_W - 2.0, SCREEN_H - 2.0],
+        SCREEN_BG,
+    ));
+    out.push(ScreenShape::Fill(
+        [8.0, 38.0, SCREEN_W - 16.0, 1.0],
+        SCREEN_INNER,
+    ));
+    out.push(ScreenShape::Fill(
+        [8.0, 160.0, SCREEN_W - 16.0, 1.0],
+        SCREEN_INNER,
+    ));
+    // Header.
+    out.push(ScreenShape::TextCenter(
+        "Skill Trees".to_owned(),
+        7.0,
+        INK,
+        true,
+    ));
+    out.push(ScreenShape::TextRight(
+        format!(
+            "{} point{}",
+            v.points,
+            if v.points == 1 { "" } else { "s" }
+        ),
+        SCREEN_W - 10.0,
+        7.0,
+        if v.points > 0 { ACCENT } else { DIM },
+        true,
+    ));
+    out.push(ScreenShape::Fill([10.0, 22.0, 130.0, 8.0], 0xFF_00_00_00));
+    let filled = 130.0 * (v.bank / XP_PER_POINT).clamp(0.0, 1.0);
+    if filled > 0.0 {
+        out.push(ScreenShape::Fill([10.0, 22.0, filled, 8.0], FILL));
+    }
+    out.push(ScreenShape::Text(
+        format!("{:.0}%", (v.bank / XP_PER_POINT * 100.0).min(100.0)),
+        [146.0, 21.0],
+        INK,
+        false,
+    ));
+    out.push(ScreenShape::Button {
+        label: if v.state.banking {
+            "Banking...".to_owned()
+        } else {
+            "Bank XP".to_owned()
+        },
+        rect: BANK_RECT,
+        enabled: true,
+        hovered: v.state.banking || inside(BANK_RECT, v.mouse),
+    });
+    // Branch tabs.
+    for (i, branch) in Branch::ALL.iter().enumerate() {
+        out.push(ScreenShape::Button {
+            label: branch.title().to_owned(),
+            rect: TAB_RECTS[i],
+            enabled: true,
+            hovered: v.state.branch == *branch || inside(TAB_RECTS[i], v.mouse),
+        });
+    }
+    // The branch's rows.
+    for (i, row) in v.state.branch.rows().iter().enumerate() {
+        let row = *row;
+        let rect = row_rect(i);
+        let selected = v.state.selected == Some(row);
+        if selected {
+            out.push(ScreenShape::Fill(rect, ROW_SELECTED));
+            out.push(ScreenShape::Fill([rect[0], rect[1], 2.0, rect[3]], ACCENT));
+        } else if inside(rect, v.mouse) {
+            out.push(ScreenShape::Fill(rect, ROW_HOVER));
+        }
+        let [x, y] = icon_at(i);
+        if row == FIST_ROW && emblem {
+            out.push(ScreenShape::Emblem([x, y], 24.0));
+        } else {
+            out.push(ScreenShape::Fill([x, y, 24.0, 24.0], NODE_BOX));
+            out.push(ScreenShape::Fill(
+                [x + 1.0, y + 1.0, 22.0, 22.0],
+                NODE_INNER,
+            ));
+            out.push(ScreenShape::Icon(
+                node_item(v, row),
+                [x + 4.0, y + 4.0],
+                16.0,
+            ));
+        }
+        let [lx, ly] = label_at(i);
+        out.push(ScreenShape::Text(
+            TREES[row].title().to_owned(),
+            [lx, ly],
+            INK,
+            true,
+        ));
+        out.push(ScreenShape::TextRight(
+            progress(v, row),
+            SCREEN_W - 10.0,
+            ly,
+            if primary(v, row).is_some() && affordable(v, row) {
+                GOOD
+            } else {
+                DIM
+            },
+            false,
+        ));
+        let [ex, ey] = effect_at(i);
+        out.push(ScreenShape::Text(
+            effect(v, row),
+            [ex, ey],
+            if row >= BIG_MINING && !v.on(row) {
+                DIM
+            } else {
+                GOOD
+            },
+            false,
+        ));
+    }
+    // Footer.
+    if let Some(row) = v.state.selected {
+        out.push(ScreenShape::Text(
+            footer(v, row),
+            [10.0, 166.0],
+            DIM,
+            false,
+        ));
+        if TREES[row].is_big() && v.rank(row) > 0 {
+            out.push(ScreenShape::Button {
+                label: if v.on(row) {
+                    "Turn off".to_owned()
+                } else {
+                    "Turn on".to_owned()
+                },
+                rect: TOGGLE_RECT,
+                enabled: true,
+                hovered: inside(TOGGLE_RECT, v.mouse),
+            });
+            let maxed = v.rank(row) >= v.maxes[row - BIG_MINING];
+            out.push(ScreenShape::Button {
+                label: if maxed {
+                    "Maxed".to_owned()
+                } else {
+                    format!("Rank up — {} pt", v.cost(row))
+                },
+                rect: ACTION_RECT,
+                enabled: !maxed && affordable(v, row),
+                hovered: inside(ACTION_RECT, v.mouse),
+            });
+        } else {
+            out.push(ScreenShape::Button {
+                label: primary_label(v, row),
+                rect: ACTION_RECT,
+                enabled: match primary(v, row) {
+                    Some(Action::Level) | Some(Action::Unlock) => affordable(v, row),
+                    Some(Action::Toggle) => true,
+                    _ => false,
+                },
+                hovered: inside(ACTION_RECT, v.mouse),
+            });
+        }
+    }
+    out.push(ScreenShape::Button {
+        label: "Done".to_owned(),
+        rect: DONE_RECT,
+        enabled: true,
+        hovered: inside(DONE_RECT, v.mouse),
+    });
+    out
+}
+
+/// The icon a row draws when the emblem is not up: the fist's changes with
+/// the tier it has bought.
+pub fn node_item(v: &ScreenView, row: usize) -> &'static str {
+    match row {
+        MELEE_ROW => "minecraft:iron_sword",
+        ARMOUR_ROW => "minecraft:iron_chestplate",
+        BULWARK_ROW => "minecraft:shield",
+        FIST_ROW => FIST_ICONS[v.levels[row].min(FIST_MAX) as usize],
+        row if row == BIG_MINING => "minecraft:golden_pickaxe",
+        row if row == BIG_MINING + 1 => "minecraft:diamond",
+        _ => "minecraft:blaze_powder",
+    }
+}
+
+/// The item a fist tier falls back to when the emblem is not uploaded.
+pub const FIST_ICONS: [&str; 6] = [
+    "minecraft:stick",
+    "minecraft:wooden_pickaxe",
+    "minecraft:stone_pickaxe",
+    "minecraft:iron_pickaxe",
+    "minecraft:diamond_pickaxe",
+    "minecraft:netherite_pickaxe",
+];
+
+/// A press on the screen: what it does to the state and to the skills, and
+/// what the tick should say.
+pub fn press(v: &ScreenView, hit: ScreenHit, s: &mut Skills) -> (ScreenState, Vec<Note>) {
+    let mut state = v.state;
+    let mut notes = Vec::new();
+    match hit {
+        ScreenHit::Tab(i) => {
+            let branch = Branch::ALL[i.min(1)];
+            state.branch = branch;
+            state.selected = branch.rows().first().copied();
+            state.banking = false;
+        }
+        ScreenHit::Node(row) => {
+            if state.selected == Some(row) {
+                if let Some(action) = primary(v, row) {
+                    notes = apply(v, row, action, s);
+                }
+            } else {
+                state.selected = Some(row);
+            }
+        }
+        ScreenHit::Bank => state.banking = true,
+        ScreenHit::Done => notes.push(Note::Close),
+        ScreenHit::Action => {
+            if let Some(row) = state.selected {
+                if let Some(action) = primary(v, row) {
+                    notes = apply(v, row, action, s);
+                }
+            }
+        }
+        ScreenHit::Toggle => {
+            if let Some(row) = state.selected {
+                if TREES[row].is_big() && v.rank(row) > 0 {
+                    notes = apply(v, row, Action::Toggle, s);
+                }
+            }
+        }
+        ScreenHit::Rank => {
+            if let Some(row) = state.selected {
+                if TREES[row].is_big() {
+                    notes = apply(v, row, Action::Rank, s);
+                }
+            }
+        }
+    }
+    (state, notes)
+}
+
+/// Spends on `row` as `action` says, and phrases what happened.
+fn apply(v: &ScreenView, row: usize, action: Action, s: &mut Skills) -> Vec<Note> {
+    let tree = TREES[row];
+    let buy = action == Action::Rank;
+    let out = s.press(tree, buy, v.tune);
+    let max = if tree.is_big() {
+        v.maxes[row - BIG_MINING]
+    } else {
+        tree.max()
+    };
+    let level = if tree.is_big() {
+        s.big_rank(row).min(max)
+    } else {
+        s.levels[row]
+    };
+    let said = match out {
+        Press::Spent(_) | Press::Ranked(_) => format!("{} is now {}/{}", tree.title(), level, max),
+        Press::Unlocked(_) => format!("{} unlocked", tree.title()),
+        Press::On(_) => format!("{} on", tree.title()),
+        Press::Off(_) => format!("{} off", tree.title()),
+        Press::NoPoints => "No points to spend: hold Bank XP to bank experience".to_owned(),
+        Press::Maxed => format!("{} is already at its last level", tree.title()),
+    };
+    let ok = !matches!(out, Press::NoPoints | Press::Maxed);
+    let mut notes = vec![Note::Bar(said)];
+    if ok {
+        notes.push(Note::Sound(CLICK, 0.5, 1.2));
+    }
+    notes
 }
 
 /// The `/skills` output: the bar, the points and every tree.
@@ -1250,7 +1818,7 @@ mod tests {
             s.spend(Tree::Fist);
         }
         assert_eq!(s.fist_tier(), FIST_MAX);
-        assert_eq!(s.fist_speed(), 8.0);
+        assert_eq!(s.fist_speed(), 9.0);
         assert_eq!(Skills::default().points, 0);
         assert!(!Skills::default().spend(Tree::Armor));
     }
@@ -1276,7 +1844,14 @@ mod tests {
         assert!(weak.fist_covers(2));
         assert!(!weak.fist_covers(3));
         weak.levels[Tree::Fist.index()] = 4;
+        assert_eq!(weak.fist_speed(), 8.0);
         assert!(weak.fist_covers(4));
+        // The last point is netherite: faster than diamond, and it still
+        // harvests everything diamond does.
+        weak.levels[Tree::Fist.index()] = 5;
+        assert_eq!(weak.fist_speed(), 9.0);
+        assert!(weak.fist_covers(4));
+        assert!(weak.fist_drop(false, 4));
     }
 
     #[test]
@@ -1379,71 +1954,111 @@ mod tests {
     }
 
     #[test]
-    fn the_box_hits_the_bar_and_each_plus() {
-        let closed = View::default();
-        assert_eq!(hit(&closed, (90.0, 6.0)), Some(Hit::Bar));
-        assert_eq!(hit(&closed, (90.0, 20.0)), None);
-        assert_eq!(hit(&closed, (200.0, 6.0)), None);
-        let open = View {
-            open: true,
-            ..View::default()
-        };
-        assert_eq!(hit(&open, (90.0, 6.0)), Some(Hit::Bar));
-        for row in 0..ROWS {
-            let y = PANEL_Y + 1.0 + row as f32 * ROW + 6.0;
-            assert_eq!(hit(&open, (PLUS_X + 4.0, y)), Some(Hit::Spend(row)));
-            // The row's label is not a button.
-            assert_eq!(hit(&open, (20.0, y)), None);
-        }
-        assert_eq!(hit(&open, (20.0, PANEL_Y + 1.0 + ROWS as f32 * ROW + 2.0)), None);
-        assert_eq!(size(&open), (PANEL.0, PANEL_Y + PANEL.1));
-        assert_eq!(size(&closed), BAR);
-    }
-
-    #[test]
-    fn the_box_draws_the_fill_points_and_rows() {
-        let v = View {
+    fn the_bar_draws_the_fill_and_the_points() {
+        let out = bar(&BarView {
             bank: 50.0,
             points: 2,
-            levels: [3, 0, 0, 0, 0, 0, 0],
-            big: [0; BIG_ROWS],
-            costs: [1; BIG_ROWS],
-            maxes: [BIG_MAX; BIG_ROWS],
-            open: true,
-            holding: true,
-        };
-        let out = shapes(&v);
+        });
         assert_eq!(out[0], Shape::Fill([0.0, 0.0, 182.0, 12.0], BACKGROUND));
-        // Half the bar, lit while held.
-        assert_eq!(out[1], Shape::Fill([1.0, 1.0, 90.0, 10.0], READY));
+        assert_eq!(out[1], Shape::Fill([1.0, 1.0, 90.0, 10.0], FILL));
         assert!(out.contains(&Shape::Text("XP  50%".to_owned(), [3.0, 2.0], INK, true)));
-        assert!(out.contains(&Shape::Text(
-            "Melee damage  3/10  +8% damage".to_owned(),
-            [3.0, PANEL_Y + 5.0],
-            READY,
-            true
-        )));
-        assert!(out.contains(&Shape::Text(
-            "Fist mining  0/4  one pickaxe tier with your fists".to_owned(),
-            [3.0, PANEL_Y + 1.0 + 3.0 * ROW + 4.0],
-            READY,
-            true
-        )));
+        assert!(
+            out.iter()
+                .any(|s| matches!(s, Shape::Text(t, _, _, _) if t == "2 points"))
+        );
     }
 
     #[test]
-    fn a_click_on_the_box_is_not_an_attack() {
-        let skills = Skills::default();
-        let origin = (10.0, 100.0);
-        // On the bar: suppressed.
-        assert!(blocks_attack(&skills, false, false, origin, (100.0, 106.0)));
-        // Right of the bar, or under it while the panel is shut: an attack.
-        assert!(!blocks_attack(&skills, false, false, origin, (300.0, 106.0)));
-        assert!(!blocks_attack(&skills, false, false, origin, (100.0, 130.0)));
-        // The panel's rows belong to the box once it is open.
-        let row = (60.0, 130.0);
-        assert!(blocks_attack(&skills, true, false, origin, row));
-        assert!(!blocks_attack(&skills, false, false, origin, row));
+    fn the_screen_lists_each_branch_and_hits_its_buttons() {
+        let s = Skills::default();
+        let v = ScreenView::of(&s, ScreenState::default(), [0.0, 0.0]);
+        // Combat starts on its first node.
+        assert_eq!(v.state.branch, Branch::Combat);
+        assert_eq!(v.state.selected, Some(MELEE_ROW));
+        assert_eq!(Branch::Gathering.rows(), &GATHERING_ROWS[..]);
+        // The taller branch's four rows fit above the footer.
+        let last = row_rect(3);
+        assert!(last[1] + last[3] <= 160.0);
+        // Tabs, rows, the bank, the footer and Done.
+        assert_eq!(
+            hit(&v, [TAB_RECTS[1][0] + 2.0, TAB_RECTS[1][1] + 2.0]),
+            Some(ScreenHit::Tab(1))
+        );
+        assert_eq!(
+            hit(&v, [100.0, NODE_TOP + 2.0]),
+            Some(ScreenHit::Node(MELEE_ROW))
+        );
+        assert_eq!(
+            hit(&v, [BANK_RECT[0] + 1.0, BANK_RECT[1] + 1.0]),
+            Some(ScreenHit::Bank)
+        );
+        assert_eq!(
+            hit(&v, [DONE_RECT[0] + 1.0, DONE_RECT[1] + 1.0]),
+            Some(ScreenHit::Done)
+        );
+        assert_eq!(
+            hit(&v, [ACTION_RECT[0] + 1.0, ACTION_RECT[1] + 1.0]),
+            Some(ScreenHit::Action)
+        );
+        // Outside the panel is nothing.
+        assert_eq!(hit(&v, [SCREEN_W + 4.0, 10.0]), None);
+    }
+
+    #[test]
+    fn a_click_selects_then_spends() {
+        let mut s = Skills {
+            points: 2,
+            ..Skills::default()
+        };
+        let state = ScreenState {
+            selected: None,
+            ..ScreenState::default()
+        };
+        // The first click on a node only selects it.
+        let v = ScreenView::of(&s, state, [0.0, 0.0]);
+        let (state, notes) = press(&v, ScreenHit::Node(MELEE_ROW), &mut s);
+        assert_eq!(state.selected, Some(MELEE_ROW));
+        assert!(notes.is_empty());
+        assert_eq!(s.levels[MELEE_ROW], 0);
+        // The second click spends a point.
+        let v = ScreenView::of(&s, state, [0.0, 0.0]);
+        let (_, notes) = press(&v, ScreenHit::Node(MELEE_ROW), &mut s);
+        assert_eq!(s.levels[MELEE_ROW], 1);
+        assert_eq!(s.points, 1);
+        assert!(matches!(notes.first(), Some(Note::Bar(_))));
+        // A branch switch selects that branch's first node.
+        let v = ScreenView::of(&s, state, [0.0, 0.0]);
+        let (state, _) = press(&v, ScreenHit::Tab(1), &mut s);
+        assert_eq!(state.branch, Branch::Gathering);
+        assert_eq!(state.selected, Some(FIST_ROW));
+    }
+
+    #[test]
+    fn the_fist_node_draws_the_emblem_when_it_is_up() {
+        let s = Skills::default();
+        let state = ScreenState {
+            branch: Branch::Gathering,
+            selected: Some(FIST_ROW),
+            banking: false,
+        };
+        let v = ScreenView::of(&s, state, [0.0, 0.0]);
+        let with = screen_shapes(&v, true);
+        let without = screen_shapes(&v, false);
+        assert!(
+            with.iter()
+                .any(|s| matches!(s, ScreenShape::Emblem(_, 24.0)))
+        );
+        assert!(
+            !without
+                .iter()
+                .any(|s| matches!(s, ScreenShape::Emblem(_, 24.0)))
+        );
+        // The fallback is the tier's pickaxe: bare hands at tier 0.
+        assert!(without.contains(&ScreenShape::Icon(
+            "minecraft:stick",
+            [100.0, NODE_TOP + 5.0],
+            16.0
+        )));
     }
 
     #[test]
@@ -1461,7 +2076,7 @@ mod tests {
         assert!(text.contains("Armour 0/10"));
         assert!(text.contains("Armour 0/10 +0.5 armour"));
         assert!(text.contains("Bulwark 0/3 25% cut"));
-        assert!(text.contains("Fist mining 2/4"));
+        assert!(text.contains("Fist mining 2/5"));
         assert!(text.contains("like a stone pickaxe"));
         assert!(text.contains("Mining speed 1/3 on"));
         assert!(text.contains("Fortune 0/3 1 point(s)"));
@@ -1652,13 +2267,13 @@ mod tests {
             ..stone
         };
         assert!((s.mining_factor(tune, impossible) - 2.0).abs() < 1e-6);
-        // A diamond fist covers diamond.
+        // A netherite fist covers diamond, at its 9.0 speed.
         s.levels[Tree::Fist.index()] = FIST_MAX;
         let diamond = MiningFacts {
             needs: 4,
             ..stone
         };
-        assert!((s.mining_factor(tune, diamond) - 2.0 * 8.0 * (100.0 / 30.0)).abs() < 1e-4);
+        assert!((s.mining_factor(tune, diamond) - 2.0 * 9.0 * (100.0 / 30.0)).abs() < 1e-4);
     }
 
     #[test]
@@ -1731,7 +2346,7 @@ mod tests {
         assert_eq!(s.fist_speed(), 6.0);
         assert_eq!(
             s.done(Op::Level(Tree::Fist, 3)),
-            "tkatt-skills: Fist mining 3/4, 5 point(s) to spend."
+            "tkatt-skills: Fist mining 3/5, 5 point(s) to spend."
         );
         s.run(Op::Reset);
         assert_eq!(s.levels, [0; ROWS]);

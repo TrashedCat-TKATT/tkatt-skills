@@ -1,6 +1,6 @@
 [mod]
 id = "tkatt_skills"
-version = "0.1.1"
+version = "0.2.0"
 priority = 100
 
 # Tested on this commit: the melee and fist hooks name game functions beyond
@@ -192,16 +192,49 @@ bindings = [
   { name = "facts", ty = "&horizon_items::blocks::StateFacts", value = "$local_ref:facts:0" },
 ]
 
-# A click on the skill box must not also swing at the world: cancel the attack
-# for that click. `Break(false)` is `Game::attack`'s own `bool`.
+# The screen's three hooks: drawing it, taking its clicks and stopping the
+# Bank button. The pointer is free while it is open, so these are the whole
+# interaction; the bar in the world takes no clicks at all.
 [[injection]]
-id = "attack"
+id = "screen_render"
+hook = "screen_render_post"
+hook_version = 1
+kind = "HEAD"
+helper = "screen_render.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "batch", ty = "&mut horizon_client::hud::HudBatch", value = "&mut *batch" },
+  { name = "screen", ty = "&horizon_client::mod_api::NativeScreenView<'_>", value = "screen" },
+]
+
+[[injection]]
+id = "screen_press"
+hook = "screen_mouse_button_pressed_pre"
+hook_version = 1
 kind = "HEAD"
 cancellable = true
-target = "horizon_client::game::Game<'_>::attack"
-helper = "attack.rs"
+helper = "screen_press.rs"
 bindings = [
-  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "screen", ty = "&horizon_client::mod_api::NativeScreenView<'_>", value = "screen" },
+  { name = "button", ty = "i32", value = "button" },
+  { name = "modifiers", ty = "u32", value = "modifiers" },
+  { name = "canceled", ty = "&mut bool", value = "canceled" },
+]
+
+[[injection]]
+id = "screen_release"
+hook = "screen_mouse_button_released_pre"
+hook_version = 1
+kind = "HEAD"
+cancellable = true
+helper = "screen_release.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "screen", ty = "&horizon_client::mod_api::NativeScreenView<'_>", value = "screen" },
+  { name = "button", ty = "i32", value = "button" },
+  { name = "modifiers", ty = "u32", value = "modifiers" },
+  { name = "canceled", ty = "&mut bool", value = "canceled" },
 ]
 
 # Fortune: the big skill adds a drop to what the block already gave. The loot

@@ -1,6 +1,5 @@
-// The bar in its corner, with the tree panel under it while open. The origin
-// is kept so the key hook can hit-test the player's click against the same
-// pixels.
+// The bar in its corner: the bank filling, the points waiting. It is display
+// only now — clicks belong to the world, and the screen takes them when open.
 fn skill_trees_hud(
     game: &mut crate::game::Game<'_>,
     batch: &mut horizon_client::hud::HudBatch,
@@ -34,15 +33,19 @@ fn skill_trees_hud(
     }
     let skills = {
         let game = &*game;
-        m::load_once(|key| game.native_setting(m::ID, key).or_else(|| game.native_setting(m::LEGACY_ID, key)))
+        m::load_once(|key| {
+            game.native_setting(m::ID, key)
+                .or_else(|| game.native_setting(m::LEGACY_ID, key))
+        })
     };
-    let (open, holding) = m::ui();
-    let view = m::View::of(&skills, open, holding);
-    let (w, h) = m::size(&view);
+    let view = m::BarView {
+        bank: skills.bank,
+        points: skills.points,
+    };
+    let (w, h) = m::BAR;
     let (x, y) = corners.place(corner, w, h);
-    m::set_origin((x, y));
     let game = &*game;
-    for shape in m::shapes(&view) {
+    for shape in m::bar(&view) {
         match shape {
             m::Shape::Fill([dx, dy, sw, sh], argb) => {
                 game.native_fill(batch, [x + dx, y + dy, sw, sh], argb);

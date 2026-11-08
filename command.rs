@@ -1,4 +1,4 @@
-// /skills shows the trees and opens the panel; /skills reset clears them.
+// /skills shows the trees; /skills reset clears them.
 // /skills points <n>, /skills level <row> <n> and /skills tune are testing and
 // tuning commands, so a tree can be tried and its numbers changed without a
 // build.
@@ -43,8 +43,6 @@ fn skill_trees_command(game: &mut crate::game::Game<'_>, command: &str, ran: &mu
     }
     let mut skills = m::load_once(|key| game.native_setting(m::ID, key).or_else(|| game.native_setting(m::LEGACY_ID, key)));
     if !op.changes() {
-        let (open, holding) = m::ui();
-        m::set_ui(!open, holding);
         game.native_chat(&m::status(&skills));
         return;
     }
