@@ -1,12 +1,13 @@
 [mod]
 id = "tkatt_skills"
-version = "0.1.0"
+version = "0.1.1"
 priority = 100
 
 # Tested on this commit: the melee and fist hooks name game functions beyond
-# the stable hook points, so the bundle pins the Nightly it was written for.
+# the stable hook points, so the bundle pins the Nightly it was written for
+# (Nightly 2026-11-08).
 [compatibility]
-horizon_revision = "ba6344a59cb9e755b730dcf02285fc0d33b97d3c"
+horizon_revision = "fdc87aecdbd116bf1e08adcd062fcbaea8c2e2ca"
 
 # The mod's logic and its tests, as a module of the game crate.
 [[module]]
@@ -95,15 +96,23 @@ bindings = [
   { name = "ran", ty = "&mut bool", value = "&mut *ran" },
 ]
 
-# Melee damage: the tree scales what Player.attack computed.
+# Melee damage: the tree scales what Player.attack computed. The initial store
+# of `amount` is modified rather than the tuple return, because a RETURN moves
+# the body's exit values and newer horizon-mixins refuses the closures in
+# `melee_damage`. Later stores are compound writes, which MODIFY_VARIABLE
+# cannot select; scaling the base amount means a critical hit multiplies the
+# tree's bonus with the rest of the hit, like a strength bonus does.
 [[injection]]
 id = "melee"
-kind = "RETURN"
+kind = "MODIFY_VARIABLE"
 target = "horizon_client::game::Game<'_>::melee_damage"
+variable = { name = "amount", ordinal = 0, at = "STORE" }
+require = 4
+ordinal = 0
 helper = "melee.rs"
 bindings = [
-  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
-  { name = "value", ty = "(f32, f32, bool, bool)", value = "$value" },
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "value", ty = "f32", value = "$value" },
 ]
 
 # Damage the player takes. The one path that funnels a mob's hit through
@@ -129,7 +138,7 @@ bindings = [
 id = "armor_direct"
 kind = "MODIFY_ARG"
 target = "horizon_client::game::creatures::Game<'_>::hurt_player_by"
-selector = "player.hurt"
+selector = "player.hurt_blocking"
 require = 1
 ordinal = 0
 argument = 3
@@ -144,26 +153,15 @@ bindings = [
 [[injection]]
 id = "fist_progress_mine"
 kind = "MODIFY_VARIABLE"
-target = "horizon_client::game::Game<'_>::tick_mining"
-variable = { name = "progress", ordinal = 0, at = "STORE" }
-require = 1
+target = "horizon_client::game::hand::Game<'_>::destroy_progress"
+variable = { name = "speed", ordinal = 0, at = "STORE" }
+require = 5
 ordinal = 0
 helper = "mining.rs"
 bindings = [
   { name = "value", ty = "f32", value = "$value" },
   { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
-  { name = "facts", ty = "&horizon_items::blocks::StateFacts", value = "$local:facts:0" },
-]
-
-[[injection]]
-id = "fist_progress_hand"
-kind = "RETURN"
-target = "horizon_client::game::hand::Game<'_>::destroy_progress"
-helper = "mining.rs"
-bindings = [
-  { name = "value", ty = "f32", value = "$value" },
-  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
-  { name = "facts", ty = "&horizon_items::blocks::StateFacts", value = "$local:facts:0" },
+  { name = "facts", ty = "&horizon_items::blocks::StateFacts", value = "$local_ref:facts:0" },
 ]
 
 [[injection]]

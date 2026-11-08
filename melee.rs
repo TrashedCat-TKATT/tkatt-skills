@@ -1,13 +1,10 @@
 // Melee damage: scale what `Player.attack` computed by the melee tree. The
-// tuple is (amount, attack scale, critical, magic).
-fn skill_trees_melee(
-    game: &mut crate::game::Game<'_>,
-    value: (f32, f32, bool, bool),
-) -> (f32, f32, bool, bool) {
+// final `amount` store is modified, so the multiplier lands on the number the
+// game hands to the target, after the critical hit and the enchantment bonus.
+fn skill_trees_melee(game: &crate::game::Game<'_>, value: f32) -> f32 {
     use crate::game::tkatt_skills as m;
-    let (amount, scale, crit, magic) = value;
     if !game.native_on(m::ID) {
-        return (amount, scale, crit, magic);
+        return value;
     }
-    (amount * m::current().melee_multiplier(m::tuning()), scale, crit, magic)
+    value * m::current().melee_multiplier(m::tuning())
 }

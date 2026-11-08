@@ -30,7 +30,7 @@ toggle a big skill.
 
 | Tree | Per level | Levels | Effect |
 | --- | --- | --- | --- |
-| Melee damage | +8% damage | 10 (+80%) | `Game::melee_damage` result, scaled |
+| Melee damage | +8% damage | 10 (+80%) | `Game::melee_damage` amount, scaled |
 | Armour | +0.5 armour points | 10 (+5) | flat points taken off every hit |
 | Bulwark | +25% damage cut a rank | 3 (+75%) | after armour points, that share of the rest is cut |
 | Fist mining | one pickaxe tier | 4 | bare hand mines and drops like wood/stone/iron/diamond |
@@ -110,12 +110,12 @@ instead of changing anything.
 
 The bundle is a `horizon-mixins` source bundle pinned to one Horizon Nightly:
 
-- `horizon-mixin.toml` — the manifest.
-- `runtime.rs` — all the logic. Its unit tests live in the development
-  checkout: a bundle may hold only `.rs` and `.toml` files.
-- `*.rs` — one thin helper per hook, using the game's own
+- `mixins/tkatt_skills/horizon-mixin.toml` — the manifest.
+- `mixins/tkatt_skills/runtime.rs` — all the logic, and the mod's Cargo library,
+  so `cargo test` runs it on its own.
+- `mixins/tkatt_skills/*.rs` — one thin helper per hook, using the game's own
   `native_*` helpers.
-- `mining.rs`, `fist_drops.rs`, `fortune.rs`, `haste.rs` —
+- `mixins/tkatt_skills/mining.rs`, `fist_drops.rs`, `fortune.rs`, `haste.rs` —
   the mining, drop and Haste effects, applied where the game asks for them. The
   arithmetic lives in `runtime.rs` as `Skills::mining_factor`,
   `Skills::fist_drop`, `fortune_roll` and `fortune_target`, so `cargo test`
@@ -124,11 +124,11 @@ The bundle is a `horizon-mixins` source bundle pinned to one Horizon Nightly:
 
 It uses Horizon's stable hook points by name (`hud`, `key`, `tick`, `mods`,
 `settings`, `settings_click`, `command`, all API 1) plus the game-function
-hooks that need the pin: `Game::melee_damage` (RETURN),
+hooks that need the pin: `Game::melee_damage` (MODIFY_VARIABLE),
 `Game::mob_hits_player` and `Game::hurt_player_by` (MODIFY_ARG on the amount),
 and six hooks on the game's own mining code (the `progress` local and
-`correct_for_drops` result in `tick_mining`, the `destroy_progress` return,
-`correct_tool`/`harvest` and the loot list's `drops` store in
+`speed` store in `destroy_progress`, `correct_tool`/`harvest` and the
+loot list's `drops` store in
 `break_block_as_player` for Fortune, and a HEAD on `break_block_as_player` for
 Haste), plus a cancellable HEAD on `Game::attack`. Fall, fire, lava and the other environmental sources
 are deliberately untouched: those bodies carry `?`, so reducing them would mean
@@ -143,13 +143,15 @@ Binds screen uses. K is only the default: rebind "Open skill trees" there and
 fixed table of the game's own mappings, so a mod's key lives on its page
 rather than in that list.
 
-Pinned in `compatibility.json`: Horizon `ba6344a` (Nightly 2026-10-30) and
-horizon-mixins `d9c83d7` (0.6.0).
+Pinned in `compatibility.json`: Horizon `fdc87aec` (Nightly 2026-11-08) and
+horizon-mixins `5a64af9` (0.6.0). The bundle is built for the launcher's
+Nightly `fdc87ae` instance: choose it under Edit instance → Version.
 
-### Tests
+### Test it
 
-The unit tests run in the development checkout (`cargo test`); this repository
-is the mixin bundle itself, so it holds source and no crate manifest.
+```sh
+cargo test
+```
 
 ### Stage and build
 
@@ -157,8 +159,8 @@ is the mixin bundle itself, so it holds source and no crate manifest.
 git clone https://github.com/horizon-rust/horizon ../horizon
 git clone https://github.com/horizon-rust/horizon-mixins ../horizon-mixins
 cd ../horizon-mixins && cargo build -p horizon-mixins-cli
-./target/debug/horizon-mixins plan --workspace ../horizon --mods . --out /tmp/plan.json
-./target/debug/horizon-mixins apply --workspace ../horizon --mods . --out /tmp/skill-trees-game
+./target/debug/horizon-mixins plan --workspace ../horizon --mods ../../skill-trees/mixins --out /tmp/plan.json
+./target/debug/horizon-mixins apply --workspace ../horizon --mods ../../skill-trees/mixins --out /tmp/skill-trees-game
 ```
 
 The launcher does the rest: install the folder as a native mod, press Build
