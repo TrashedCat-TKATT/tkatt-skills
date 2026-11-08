@@ -39,8 +39,8 @@ MIT. Not made or endorsed by the Horizon project.
 | Tree | Per level | Levels | Effect |
 | --- | --- | --- | --- |
 | Melee damage | +8% damage | 10 (+80%) | `Game::melee_damage` amount, scaled |
-| Armour | +0.5 armour points | 10 (+5) | flat points taken off every hit |
-| Bulwark | +25% damage cut a rank | 3 (+75%) | after armour points, that share of the rest is cut |
+| Armour | -2.5% damage taken a level | 10 (-25%) | that share of every hit is cut |
+| Bulwark | +10% damage cut a rank | 3 (+30%) | on top of the armour share, the two never cutting more than half a hit |
 | Fist mining | one pickaxe tier | 5 | bare hand mines and drops like wood/stone/iron/diamond/netherite |
 | Mining speed | +50% mining speed a rank | 3 ranks | every block you break, up to +150% |
 | Fortune | 25% a rank | 3 ranks | one more of the block's first drop, up to 75% |
@@ -51,10 +51,11 @@ Fist tiers: level 1 mines like a wooden pickaxe (2.0 speed), 2 stone (4.0),
 `minecraft:mineable/pickaxe`, and a block's `needs_*_tool` tag is satisfied up
 to your tier, so stone drops to a level-2 fist.
 
-Armour points come off incoming damage first, never below zero; each Bulwark
-rank then cuts a share of what is left, 25% by default and capped at 90% in
-all. A hit of 8 with 5 armour points lands as 3, or as 2.25 with one Bulwark
-rank.
+The armour tree and the Bulwark ranks cut shares of a hit, and together never
+more than half of it before vanilla armour takes its own share. A landed hit
+also never drops below 1 damage point, so knockback, the damage tint and an
+arrow's hit always happen, however far the tuning is pushed: a hit of 8 with
+ten armour levels lands as 6, or as 5.2 with one Bulwark rank and 4 at three.
 
 The last three rows are big skills. Each has three ranks; a rank costs points
 (the tuning sets how many, one by default). The footer's button unlocks the
@@ -65,20 +66,22 @@ called `tuning`, next to `state`, and `/skills tune` changes them in game. The
 line is:
 
 ```text
-3|mining_step|fortune_chance|haste_ticks|haste_amp|mining_cost|fortune_cost|haste_cost|melee_step|armor_points|ward_step|mining_tier|fortune_tier|haste_tier
+4|mining_step|fortune_chance|haste_ticks|haste_amp|mining_cost|fortune_cost|haste_cost|melee_step|armor_cut|ward_step|mining_tier|fortune_tier|haste_tier
 ```
 
-with defaults `3|0.50|0.25|200|1|1|1|1|0.08|0.50|0.25|3|3|3`. `melee_step` is
-the damage added per level (+8% by default), `armor_points` the flat armour
-added per level (0.5), `ward_step` the damage cut each Bulwark rank adds
-(0.25, capped at 0.9 in all), the `*_tier` fields are each big skill's last
+with defaults `4|0.500|0.25|200|1|1|1|1|0.08|0.025|0.10|3|3|3`. `melee_step` is
+the damage added per level (+8% by default), `armor_cut` the share of a hit the
+armour tree cuts per level (0.025, so 2.5%), `ward_step` the damage cut each
+Bulwark rank adds (0.10, capped at 0.30 in all; with the armour tree the two
+never cut more than half a hit, and a landed hit never drops below 1), the
+`*_tier` fields are each big skill's last
 rank, and the costs are points a rank. An existing version-1 line still reads:
 its old `armor_step` percentage is ignored, because that damage reduction now
 lives on the Bulwark row; a version-2 line takes the default Bulwark cut. So `/skills tune melee damage 0.1`,
-`/skills tune armour points 1.0`, `/skills tune bulwark cut 0.1`, `/skills tune fortune tier 4` and
+`/skills tune armour share 0.025`, `/skills tune bulwark cut 0.1`, `/skills tune fortune tier 4` and
 `/skills tune haste cost 2` all work, and a hand-edited file is read at the
 next launch. Values are clamped (skill steps 0..5, melee damage 0..1, armour
-points 0..10, ward cut 0..1, chance 0..1, ticks 20..1200, amp 0..4, cost
+share 0..1, ward cut 0..1, chance 0..1, ticks 20..1200, amp 0..4, cost
 1..10, tier 1..10), so a bad number cannot break a skill.
 
 ### Testing commands
@@ -93,7 +96,7 @@ a tree:
   row's end: `/skills level fist 5` is a netherite fist, `/skills level armour 99`
   is level 10, and `/skills level fortune 1` unlocks rank 1 of Fortune.
 - `/skills tune` shows the modifiers' numbers; `/skills tune <row> <field>
-  <value>` changes one. Fields: `melee damage`, `armour points`, `bulwark cut`,
+  <value>` changes one. Fields: `melee damage`, `armour share`, `bulwark cut`,
   `mining step`, `fortune chance`, `haste ticks`, `haste amp`, any big row's
   `cost` and any big row's `tier`.
 

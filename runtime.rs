@@ -12,7 +12,7 @@ pub const ID: &str = "tkatt_skills";
 /// on the first launch under the new id, so a rename loses no progress.
 pub const LEGACY_ID: &str = "skill_trees";
 pub const NAME: &str = "tkatt-skills";
-pub const VERSION: &str = "0.2.1";
+pub const VERSION: &str = "0.2.2";
 pub const DESCRIPTION: &str = "Bank experience into a bar for skill points, then spend them on melee damage, armour, mining with your fists, or big skills like mining speed, Fortune and Haste. A framework for skill trees.";
 
 /// One skill point per this much banked experience.
@@ -21,12 +21,19 @@ pub const XP_PER_POINT: f32 = 100.0;
 pub const XP_PER_TICK: u32 = 2;
 /// Melee damage added per level: +8%, ten levels.
 pub const MELEE_PER_LEVEL: f32 = 0.08;
-/// Flat armour points added per level: 0.5 is half a damage point.
-pub const ARMOR_POINTS_PER_LEVEL: f32 = 0.5;
-/// The share of the remaining damage one Bulwark rank cuts: 0.25 is 25%.
-pub const WARD_CUT_PER_RANK: f32 = 0.25;
+/// The share of an incoming hit the armour tree cuts per level: 0.025 is
+/// 2.5%, so ten levels cut a quarter of the hit.
+pub const ARMOR_CUT_PER_LEVEL: f32 = 0.025;
+/// The share of the remaining damage one Bulwark rank cuts: 0.10 is 10%.
+pub const WARD_CUT_PER_RANK: f32 = 0.10;
 /// The most the Bulwark ranks can cut, however far the tuning is pushed.
-pub const WARD_CUT_MAX: f32 = 0.9;
+pub const WARD_CUT_MAX: f32 = 0.30;
+/// The most the armour tree and the Bulwark ranks can cut together: half the
+/// hit, before vanilla armour takes its own share of what is left.
+pub const INCOMING_CUT_MAX: f32 = 0.5;
+/// A landed hit never comes out below this, so the game's hurt step — and with
+/// it knockback, the damage tint and an arrow's hit — always runs.
+pub const INCOMING_FLOOR: f32 = 1.0;
 /// Bulwark ranks: each one adds another cut.
 pub const BULWARK_MAX: u32 = 3;
 /// Every tree but the fist one stops here.
@@ -80,8 +87,8 @@ pub struct Tune {
     pub haste_cost: u32,
     /// Melee damage added per level: 0.08 is +8%.
     pub melee_step: f32,
-    /// Flat armour points added per level: 0.5 is half a point.
-    pub armor_points: f32,
+    /// The share of a hit the armour tree cuts per level: 0.025 is 2.5%.
+    pub armor_cut: f32,
     /// The damage cut each Bulwark rank adds: 0.25 is 25%.
     pub ward_step: f32,
     /// Each big skill's last rank.
@@ -101,7 +108,7 @@ impl Default for Tune {
             fortune_cost: 1,
             haste_cost: 1,
             melee_step: MELEE_PER_LEVEL,
-            armor_points: ARMOR_POINTS_PER_LEVEL,
+            armor_cut: ARMOR_CUT_PER_LEVEL,
             ward_step: WARD_CUT_PER_RANK,
             mining_tier: BIG_MAX,
             fortune_tier: BIG_MAX,
@@ -135,7 +142,7 @@ impl Tune {
     /// the melee/armour steps and the big skills' tiers.
     pub fn encode(&self) -> String {
         format!(
-            "3|{:.2}|{:.2}|{}|{}|{}|{}|{}|{:.2}|{:.2}|{:.2}|{}|{}|{}",
+            "4|{:.3}|{:.2}|{}|{}|{}|{}|{}|{:.2}|{:.3}|{:.2}|{}|{}|{}",
             self.mining_step,
             self.fortune_chance,
             self.haste_ticks,
@@ -144,7 +151,7 @@ impl Tune {
             self.fortune_cost,
             self.haste_cost,
             self.melee_step,
-            self.armor_points,
+            self.armor_cut,
             self.ward_step,
             self.mining_tier,
             self.fortune_tier,
@@ -162,6 +169,7 @@ impl Tune {
             Some("1") => 1,
             Some("2") => 2,
             Some("3") => 3,
+            Some("4") => 4,
             _ => return out,
         };
         let mut next = |default: f32, low: f32, high: f32| {
@@ -179,11 +187,12 @@ impl Tune {
         out.fortune_cost = next(out.fortune_cost as f32, 1.0, 10.0) as u32;
         out.haste_cost = next(out.haste_cost as f32, 1.0, 10.0) as u32;
         out.melee_step = next(out.melee_step, 0.0, 1.0);
-        // Version 1 stored a percentage here; its damage reduction moved to
-        // the Bulwark row, so an old line takes the new flat default.
-        let armor_slot = next(ARMOR_POINTS_PER_LEVEL, 0.0, 10.0);
-        if version >= 2 {
-            out.armor_points = armor_slot;
+        // Versions 1 to 3 stored flat armour points here; version 4 stores the
+        // share of a hit the tree cuts. An older line takes the new default
+        // rather than reading half a damage point as half a hit.
+        let armor_slot = next(ARMOR_CUT_PER_LEVEL, 0.0, 1.0);
+        if version >= 4 {
+            out.armor_cut = armor_slot;
         }
         // Version 3 added the cut per Bulwark rank; older lines take the
         // default instead of reading a later field out of place.
@@ -211,7 +220,7 @@ impl Tune {
             (Tree::Fortune, Field::Cost) => self.fortune_cost = value.clamp(1.0, 10.0) as u32,
             (Tree::Haste, Field::Cost) => self.haste_cost = value.clamp(1.0, 10.0) as u32,
             (Tree::Melee, Field::Damage) => self.melee_step = value.clamp(0.0, 1.0),
-            (Tree::Armor, Field::Armor) => self.armor_points = value.clamp(0.0, 10.0),
+            (Tree::Armor, Field::Armor) => self.armor_cut = value.clamp(0.0, 1.0),
             (Tree::Bulwark, Field::Ward) => self.ward_step = value.clamp(0.0, 1.0),
             (Tree::Mining, Field::Tier) => self.mining_tier = value.clamp(1.0, 10.0) as u32,
             (Tree::Fortune, Field::Tier) => self.fortune_tier = value.clamp(1.0, 10.0) as u32,
@@ -224,9 +233,9 @@ impl Tune {
     /// What `/skills tune` prints.
     pub fn show(&self) -> String {
         format!(
-            "tkatt-skills tuning: melee +{:.0}%/level, armour +{:.1} points/level, bulwark {:.0}%/rank; mining +{:.0}%/rank, fortune {:.0}%/rank, haste {} ticks Haste {}; costs {} / {} / {}; ranks {} / {} / {}",
+            "tkatt-skills tuning: melee +{:.0}%/level, armour -{:.1}%/level, bulwark {:.0}%/rank; mining +{:.0}%/rank, fortune {:.0}%/rank, haste {} ticks Haste {}; costs {} / {} / {}; ranks {} / {} / {}",
             self.melee_step * 100.0,
-            self.armor_points,
+            self.armor_cut * 100.0,
             self.ward_step * 100.0,
             self.mining_step * 100.0,
             self.fortune_chance * 100.0,
@@ -257,7 +266,7 @@ pub enum Field {
     Cost,
     /// Melee damage added per level.
     Damage,
-    /// Flat armour points added per level.
+    /// The share of a hit the tree cuts per level.
     Armor,
     /// The damage cut each Bulwark rank adds.
     Ward,
@@ -274,7 +283,7 @@ impl Field {
             "amp" | "amplifier" => Some(Field::Amp),
             "cost" => Some(Field::Cost),
             "damage" => Some(Field::Damage),
-                        "points" | "armor" | "armour" => Some(Field::Armor),
+                        "share" | "points" | "armor" | "armour" => Some(Field::Armor),
             "cut" | "ward" | "reduction" => Some(Field::Ward),
             "tier" | "ranks" | "max" => Some(Field::Tier),
             _ => None,
@@ -289,7 +298,7 @@ impl Field {
             Field::Amp => "amp",
             Field::Cost => "cost",
             Field::Damage => "damage",
-            Field::Armor => "armor",
+            Field::Armor => "share",
             Field::Ward => "cut",
             Field::Tier => "tier",
         }
@@ -303,7 +312,7 @@ impl Field {
             Field::Amp => "amp is 0..4: /skills tune haste amp 1",
             Field::Cost => "cost is 1..10 points a rank: /skills tune mining cost 1",
             Field::Damage => "damage is 0..1 a level: /skills tune melee damage 0.08",
-            Field::Armor => "points is 0..10 a level: /skills tune armour points 0.5",
+            Field::Armor => "share is 0..1 a level: /skills tune armour share 0.025",
             Field::Ward => "cut is 0..1 a rank: /skills tune bulwark cut 0.25",
             Field::Tier => "tier is 1..10 ranks: /skills tune fortune tier 3",
         }
@@ -391,7 +400,7 @@ impl Tree {
     pub fn per_level(self, tune: Tune) -> String {
         match self {
             Tree::Melee => format!("+{:.0}% damage", tune.melee_step * 100.0),
-            Tree::Armor => format!("+{:.1} armour", tune.armor_points),
+            Tree::Armor => format!("-{:.1}% damage", tune.armor_cut * 100.0),
             Tree::Bulwark => format!("{:.0}% cut", tune.ward_step * 100.0),
             Tree::Fist => "one pickaxe tier with your fists".to_owned(),
             Tree::Mining => "+50% mining speed".to_owned(),
@@ -605,9 +614,9 @@ impl Skills {
         1.0 + tune.melee_step * self.levels[Tree::Melee.index()] as f32
     }
 
-    /// Flat armour points the armour tree has bought at this tuning.
-    pub fn armor_points(&self, tune: Tune) -> f32 {
-        tune.armor_points * self.levels[Tree::Armor.index()] as f32
+    /// The share of a hit the armour tree cuts at this tuning.
+    pub fn armor_cut(&self, tune: Tune) -> f32 {
+        (tune.armor_cut * self.levels[Tree::Armor.index()] as f32).clamp(0.0, 1.0)
     }
 
     /// How much of the remaining damage the Bulwark ranks cut, capped so a
@@ -616,11 +625,16 @@ impl Skills {
         (tune.ward_step * self.levels[Tree::Bulwark.index()] as f32).clamp(0.0, WARD_CUT_MAX)
     }
 
-    /// Incoming damage: the armour points come off first, never below zero,
-    /// then the Bulwark ranks cut a share of what is left.
+    /// Incoming damage: the armour tree and the Bulwark ranks cut their shares,
+    /// together never more than half the hit, and a landed hit never comes out
+    /// below one point — zero damage would skip the game's hurt step, and with
+    /// it the knockback, the damage tint and the arrow's hit.
     pub fn incoming_damage(&self, tune: Tune, value: f32) -> f32 {
-        let after = (value - self.armor_points(tune)).max(0.0);
-        after * (1.0 - self.ward_cut(tune))
+        if value <= 0.0 {
+            return value;
+        }
+        let cut = (self.armor_cut(tune) + self.ward_cut(tune)).clamp(0.0, INCOMING_CUT_MAX);
+        (value * (1.0 - cut)).max(value.min(INCOMING_FLOOR))
     }
 
     /// The pickaxe speed a bare hand mines at: 1.0 until the first tier.
@@ -1260,8 +1274,8 @@ pub fn effect(v: &ScreenView, row: usize) -> String {
             v.tune.melee_step * v.levels[row] as f32 * 100.0
         ),
         ARMOUR_ROW => format!(
-            "+{:.1} armour",
-            v.tune.armor_points * v.levels[row] as f32
+            "-{:.1}% damage",
+            v.tune.armor_cut * v.levels[row] as f32 * 100.0
         ),
         BULWARK_ROW => format!(
             "-{:.0}% damage taken",
@@ -1862,12 +1876,12 @@ mod tests {
         let mut s = Skills::default();
         let tune = Tune::default();
         assert_eq!(s.melee_multiplier(tune), 1.0);
-        assert_eq!(s.armor_points(tune), 0.0);
+        assert_eq!(s.armor_cut(tune), 0.0);
         assert_eq!(s.fist_speed(), 1.0);
         s.levels = [10, 10, 0, 4, 0, 0, 0];
         assert!((s.melee_multiplier(tune) - 1.8).abs() < 1e-6);
-        assert!((s.armor_points(tune) - 5.0).abs() < 1e-6);
-        assert!((s.incoming_damage(tune, 9.0) - 4.0).abs() < 1e-6);
+        assert!((s.armor_cut(tune) - 0.25).abs() < 1e-6);
+        assert!((s.incoming_damage(tune, 9.0) - 6.75).abs() < 1e-6);
         assert_eq!(s.fist_speed(), 8.0);
         assert!(s.fist_covers(3));
         let mut weak = Skills {
@@ -1949,19 +1963,19 @@ mod tests {
             levels: [0, 10, 0, 0, 0, 0, 0],
             ..Skills::default()
         };
-        // Ten armour levels at half a point each.
-        assert!((s.armor_points(tune) - 5.0).abs() < 1e-6);
-        // No ranks: the flat points still come off, never below zero.
+        // Ten armour levels cut a quarter of the hit.
+        assert!((s.armor_cut(tune) - 0.25).abs() < 1e-6);
+        // No ranks: the armour share still comes off, never to nothing.
         assert_eq!(s.ward_cut(tune), 0.0);
-        assert!((s.incoming_damage(tune, 8.0) - 3.0).abs() < 1e-6);
-        assert_eq!(s.incoming_damage(tune, 2.0), 0.0);
-        // One rank cuts 25% of what is left, two half, three 75%.
+        assert!((s.incoming_damage(tune, 8.0) - 6.0).abs() < 1e-6);
+        assert!((s.incoming_damage(tune, 2.0) - 1.5).abs() < 1e-6);
+        // Each rank adds 10%, and all three still stop at half the hit.
         s.levels[Tree::Bulwark.index()] = 1;
-        assert!((s.incoming_damage(tune, 8.0) - 2.25).abs() < 1e-6);
+        assert!((s.incoming_damage(tune, 8.0) - 5.2).abs() < 1e-6);
         s.levels[Tree::Bulwark.index()] = 2;
-        assert!((s.incoming_damage(tune, 8.0) - 1.5).abs() < 1e-6);
+        assert!((s.incoming_damage(tune, 8.0) - 4.4).abs() < 1e-6);
         s.levels[Tree::Bulwark.index()] = 3;
-        assert!((s.incoming_damage(tune, 8.0) - 0.75).abs() < 1e-6);
+        assert!((s.incoming_damage(tune, 8.0) - 4.0).abs() < 1e-6);
         // The cut a rank adds is tunable, and capped below the whole hit.
         let mut tuned = Tune::default();
         assert!(tuned.set(Tree::Bulwark, Field::Ward, 0.1).is_ok());
@@ -1974,7 +1988,7 @@ mod tests {
             levels: [0, 0, 2, 0, 0, 0, 0],
             ..Skills::default()
         };
-        assert!((ward.incoming_damage(tune, 8.0) - 4.0).abs() < 1e-6);
+        assert!((ward.incoming_damage(tune, 8.0) - 6.4).abs() < 1e-6);
         // A rank costs a point, and the row stops at three.
         let mut s = Skills {
             points: 4,
@@ -2108,8 +2122,8 @@ mod tests {
         assert!(text.starts_with("tkatt-skills: 25 / 100 xp banked, 1 point(s) to spend"));
         assert!(text.contains("Melee damage 0/10"));
         assert!(text.contains("Armour 0/10"));
-        assert!(text.contains("Armour 0/10 +0.5 armour"));
-        assert!(text.contains("Bulwark 0/3 25% cut"));
+        assert!(text.contains("Armour 0/10 -2.5% damage"));
+        assert!(text.contains("Bulwark 0/3 10% cut"));
         assert!(text.contains("Fist mining 2/5"));
         assert!(text.contains("like a stone pickaxe"));
         assert!(text.contains("Mining speed 1/3 on"));
@@ -2214,18 +2228,18 @@ mod tests {
             ..Skills::default()
         };
         assert!((trees.melee_multiplier(tune) - 2.0).abs() < 1e-6);
-        assert!((trees.armor_points(tune) - 0.5).abs() < 1e-6);
+        assert!((trees.armor_cut(tune) - 0.5).abs() < 1e-6);
         assert_eq!(trees.ward_cut(tune), 0.0);
         assert!(tune.set(Tree::Fortune, Field::Tier, 5.0).is_ok());
         assert_eq!(tune.max(BIG_FORTUNE), 5);
         // An old line without them keeps the defaults.
         let old = Tune::decode("1|0.50|0.25|200|1|1|1|1");
         assert_eq!(old.melee_step, MELEE_PER_LEVEL);
-        assert_eq!(old.armor_points, ARMOR_POINTS_PER_LEVEL);
+        assert_eq!(old.armor_cut, ARMOR_CUT_PER_LEVEL);
         // A version-2 line has no cut field, so later fields stay aligned.
         let v2 = Tune::decode("2|0.50|0.25|200|1|1|1|1|0.08|1.50|3|4|5");
         assert_eq!(v2.ward_step, WARD_CUT_PER_RANK);
-        assert_eq!(v2.armor_points, 1.5);
+        assert_eq!(v2.armor_cut, ARMOR_CUT_PER_LEVEL);
         assert_eq!(v2.mining_tier, 3);
         assert_eq!(v2.fortune_tier, 4);
         assert_eq!(v2.haste_tier, 5);
@@ -2318,6 +2332,41 @@ mod tests {
         assert_eq!(fortune_target(2, 0.5, 0.5), None);
         assert_eq!(fortune_target(2, 2.0, 0.99), Some(0));
         assert_eq!(fortune_target(2, 1.0, 0.999), Some(0));
+    }
+
+    /// A landed hit always hurts: the cuts are shares of the hit, capped, and a
+    /// hit never falls below one point, so knockback and arrow hits still run.
+    #[test]
+    fn the_armour_tree_never_makes_the_player_untouchable() {
+        let tune = Tune::default();
+        let mut s = Skills::default();
+        s.levels[Tree::Armor.index()] = 6;
+        // A zombie's normal hit is 3 points: some of it still lands.
+        let hit = s.incoming_damage(tune, 3.0);
+        assert!(hit >= INCOMING_FLOOR, "level 6 left {hit}");
+        assert!(hit < 3.0);
+        // Ten levels with Bulwark at three ranks cut half the hit, no more.
+        let mut all = Skills::default();
+        all.levels[Tree::Armor.index()] = MAX_LEVEL;
+        all.levels[Tree::Bulwark.index()] = BULWARK_MAX;
+        assert_eq!(all.incoming_damage(tune, 10.0), 5.0);
+        // Tuning pushed past the caps cannot beat the floor.
+        let wild = Tune {
+            armor_cut: 1.0,
+            ward_step: 1.0,
+            ..tune
+        };
+        assert_eq!(all.incoming_damage(wild, 3.0), 1.5);
+        assert_eq!(all.incoming_damage(wild, 0.5), 0.5);
+        assert_eq!(all.incoming_damage(wild, 0.0), 0.0);
+    }
+
+    #[test]
+    fn an_older_tuning_line_takes_the_new_armour_share() {
+        let old = Tune::decode("3|0.50|0.25|200|1|1|1|1|0.08|0.50|0.25|3|3|3");
+        assert_eq!(old.armor_cut, ARMOR_CUT_PER_LEVEL);
+        assert_eq!(old.ward_step, 0.25);
+        assert_eq!(Tune::decode(&Tune::default().encode()), Tune::default());
     }
 
     #[test]

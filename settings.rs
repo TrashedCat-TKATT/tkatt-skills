@@ -23,7 +23,7 @@ fn skill_trees_settings(
         skills.fist_speed()
     ));
     let tune = m::tuning();
-    buttons.push(format!("Armour: {:.1} points", skills.armor_points(tune)));
+    buttons.push(format!("Armour: -{:.0}% damage", skills.armor_cut(tune) * 100.0));
     buttons.push(format!(
         "Bulwark: {}/{} ({:.0}% cut)",
         skills.levels[m::Tree::Bulwark.index()],
