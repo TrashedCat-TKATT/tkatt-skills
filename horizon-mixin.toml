@@ -1,0 +1,235 @@
+[mod]
+id = "tkatt_skills"
+version = "0.1.0"
+priority = 100
+
+# Tested on this commit: the melee and fist hooks name game functions beyond
+# the stable hook points, so the bundle pins the Nightly it was written for.
+[compatibility]
+horizon_revision = "ba6344a59cb9e755b730dcf02285fc0d33b97d3c"
+
+# The mod's logic and its tests, as a module of the game crate.
+[[module]]
+id = "runtime"
+file = "crates/horizon-client/src/game.rs"
+name = "tkatt_skills"
+source = "runtime.rs"
+
+[[injection]]
+id = "hud"
+hook = "hud"
+hook_version = 1
+kind = "HEAD"
+helper = "hud.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "batch", ty = "&mut horizon_client::hud::HudBatch", value = "&mut *batch" },
+  { name = "corners", ty = "&mut horizon_client::extras_hud::Corners", value = "&mut *corners" },
+]
+
+[[injection]]
+id = "key"
+hook = "key"
+hook_version = 1
+kind = "HEAD"
+helper = "key.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "key", ty = "&str", value = "key" },
+  { name = "pressed", ty = "bool", value = "pressed" },
+]
+
+[[injection]]
+id = "tick"
+hook = "tick"
+hook_version = 1
+kind = "HEAD"
+helper = "tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "list"
+hook = "mods"
+hook_version = 1
+kind = "HEAD"
+helper = "list.rs"
+bindings = [
+  { name = "mods", ty = "&mut Vec<crate::game::native_hooks::NativeMod>", value = "&mut *mods" },
+]
+
+[[injection]]
+id = "settings"
+hook = "settings"
+hook_version = 1
+kind = "HEAD"
+helper = "settings.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "buttons", ty = "&mut Vec<String>", value = "&mut *buttons" },
+]
+
+[[injection]]
+id = "click"
+hook = "settings_click"
+hook_version = 1
+kind = "HEAD"
+helper = "click.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "button", ty = "usize", value = "button" },
+]
+
+[[injection]]
+id = "command"
+hook = "command"
+hook_version = 1
+kind = "HEAD"
+helper = "command.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "command", ty = "&str", value = "command" },
+  { name = "ran", ty = "&mut bool", value = "&mut *ran" },
+]
+
+# Melee damage: the tree scales what Player.attack computed.
+[[injection]]
+id = "melee"
+kind = "RETURN"
+target = "horizon_client::game::Game<'_>::melee_damage"
+helper = "melee.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "value", ty = "(f32, f32, bool, bool)", value = "$value" },
+]
+
+# Damage the player takes. The one path that funnels a mob's hit through
+# `hurt_player_from` is scaled before it gets there; direct damage types go
+# through `hurt_player_by`, where the amount handed to the health component is
+# scaled. Fall, fire and the other motion events are left to vanilla: their
+# bodies carry `?`, so reducing them means cancelling and re-applying the
+# damage, which would skip any other mod's hooks inside those functions.
+[[injection]]
+id = "armor_hit"
+kind = "MODIFY_ARG"
+target = "horizon_client::game::creatures::Game<'_>::mob_hits_player"
+selector = "self.hurt_player_from"
+require = 1
+ordinal = 0
+argument = 0
+helper = "armor.rs"
+bindings = [
+  { name = "value", ty = "f32", value = "$value" },
+]
+
+[[injection]]
+id = "armor_direct"
+kind = "MODIFY_ARG"
+target = "horizon_client::game::creatures::Game<'_>::hurt_player_by"
+selector = "player.hurt"
+require = 1
+ordinal = 0
+argument = 3
+helper = "armor.rs"
+bindings = [
+  { name = "value", ty = "f32", value = "$value" },
+]
+
+# Fists: a bare hand mines and drops as the unlocked pickaxe tier. The tier is
+# read from the player's own skills where the game asks for the speed or the
+# drop, so the item rules keep no copy of it and no other crate holds state.
+[[injection]]
+id = "fist_progress_mine"
+kind = "MODIFY_VARIABLE"
+target = "horizon_client::game::Game<'_>::tick_mining"
+variable = { name = "progress", ordinal = 0, at = "STORE" }
+require = 1
+ordinal = 0
+helper = "mining.rs"
+bindings = [
+  { name = "value", ty = "f32", value = "$value" },
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "facts", ty = "&horizon_items::blocks::StateFacts", value = "$local:facts:0" },
+]
+
+[[injection]]
+id = "fist_progress_hand"
+kind = "RETURN"
+target = "horizon_client::game::hand::Game<'_>::destroy_progress"
+helper = "mining.rs"
+bindings = [
+  { name = "value", ty = "f32", value = "$value" },
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "facts", ty = "&horizon_items::blocks::StateFacts", value = "$local:facts:0" },
+]
+
+[[injection]]
+id = "fist_drops_tool"
+kind = "MODIFY_VARIABLE"
+target = "horizon_client::game::Game<'_>::break_block_as_player"
+variable = { name = "correct_tool", ordinal = 0, at = "STORE" }
+require = 1
+ordinal = 0
+helper = "fist_drops.rs"
+bindings = [
+  { name = "value", ty = "bool", value = "$value" },
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "facts", ty = "&horizon_items::blocks::StateFacts", value = "$local_ref:facts:0" },
+]
+
+[[injection]]
+id = "fist_drops_harvest"
+kind = "MODIFY_VARIABLE"
+target = "horizon_client::game::Game<'_>::break_block_as_player"
+variable = { name = "harvest", ordinal = 0, at = "STORE" }
+require = 1
+ordinal = 0
+helper = "fist_drops.rs"
+bindings = [
+  { name = "value", ty = "bool", value = "$value" },
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "facts", ty = "&horizon_items::blocks::StateFacts", value = "$local_ref:facts:0" },
+]
+
+# A click on the skill box must not also swing at the world: cancel the attack
+# for that click. `Break(false)` is `Game::attack`'s own `bool`.
+[[injection]]
+id = "attack"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client::game::Game<'_>::attack"
+helper = "attack.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+# Fortune: the big skill adds a drop to what the block already gave. The loot
+# list's own `drops` store is modified, because `block_loot_at`'s body contains
+# an opaque macro and RETURN refuses it.
+[[injection]]
+id = "fortune"
+kind = "MODIFY_VARIABLE"
+target = "horizon_client::game::Game<'_>::break_block_as_player"
+variable = { name = "drops", ordinal = 0, at = "STORE" }
+require = 1
+ordinal = 0
+helper = "fortune.rs"
+bindings = [
+  { name = "value", ty = "Vec<horizon_client::items::ItemStack>", value = "$value" },
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+]
+
+# Haste: every break grants the effect, bare hand or tool, so it hooks the break
+# itself rather than the held item's damage step.
+[[injection]]
+id = "haste"
+kind = "HEAD"
+target = "horizon_client::game::Game<'_>::break_block_as_player"
+helper = "haste.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
