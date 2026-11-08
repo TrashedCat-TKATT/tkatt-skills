@@ -9,10 +9,19 @@ fn skill_trees_fortune(
 ) -> Vec<horizon_client::items::ItemStack> {
     use crate::game::tkatt_skills as m;
     let mut loot = value;
-    if loot.is_empty() || !game.native_on(m::ID) || !m::current().fortune_on() {
+    if loot.is_empty() || !game.native_on(m::ID) {
         return loot;
     }
-    let chance = m::current().fortune_chance(m::tuning());
+    // The drops are rolled on the game's server thread, where the screen's
+    // load has not happened: read the state here (once).
+    let skills = m::load_once(|key| {
+        game.native_setting(m::ID, key)
+            .or_else(|| game.native_setting(m::LEGACY_ID, key))
+    });
+    if !skills.fortune_on() {
+        return loot;
+    }
+    let chance = skills.fortune_chance(m::tuning());
     if let Some(i) = m::fortune_target(loot.len(), chance, m::fortune_roll(pos)) {
         loot[i].count = loot[i].count.saturating_add(1);
     }

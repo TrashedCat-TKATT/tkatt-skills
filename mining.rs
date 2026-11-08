@@ -12,7 +12,12 @@ fn skill_trees_mining(
     if facts.hardness == 0.0 {
         return value;
     }
-    let skills = m::current();
+    // Mining progress is computed on the game's server thread, where the
+    // screen's load has not happened: read the state here (once).
+    let skills = m::load_once(|key| {
+        game.native_setting(m::ID, key)
+            .or_else(|| game.native_setting(m::LEGACY_ID, key))
+    });
     let tune = m::tuning();
     if skills.fist_tier() == 0 && skills.mining_multiplier(tune) == 1.0 {
         return value;

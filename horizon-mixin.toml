@@ -1,6 +1,6 @@
 [mod]
 id = "tkatt_skills"
-version = "0.2.0"
+version = "0.2.1"
 priority = 100
 
 # Tested on this commit: the melee and fist hooks name game functions beyond

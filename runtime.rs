@@ -12,7 +12,7 @@ pub const ID: &str = "tkatt_skills";
 /// on the first launch under the new id, so a rename loses no progress.
 pub const LEGACY_ID: &str = "skill_trees";
 pub const NAME: &str = "tkatt-skills";
-pub const VERSION: &str = "0.2.0";
+pub const VERSION: &str = "0.2.1";
 pub const DESCRIPTION: &str = "Bank experience into a bar for skill points, then spend them on melee damage, armour, mining with your fists, or big skills like mining speed, Fortune and Haste. A framework for skill trees.";
 
 /// One skill point per this much banked experience.
@@ -739,10 +739,6 @@ impl Skills {
 }
 
 thread_local! {
-    /// The player's skills, read from the mod's settings folder once.
-    static STATE: std::cell::RefCell<Option<Skills>> = const { std::cell::RefCell::new(None) };
-    /// The tunable big-skill numbers, read from the same folder once.
-    static TUNE: std::cell::Cell<Option<Tune>> = const { std::cell::Cell::new(None) };
     /// The screen's branch, its selected row and whether Bank is held.
     static SCREEN: std::cell::Cell<ScreenState> = const {
         std::cell::Cell::new(ScreenState {
@@ -755,30 +751,50 @@ thread_local! {
     static NOTES: std::cell::RefCell<Vec<Note>> = const { std::cell::RefCell::new(Vec::new()) };
     /// Whether the emblem made it into the atlas this session.
     static ICON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// The mod is on in Options > Mods (on until a hook first sees it off).
-    static ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
-    /// The old id's files were looked at this session.
-    static CARRIED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// The player's skills and the tuning are shared by every thread rather than
+// kept per thread: single player breaks blocks on the game's server thread
+// while the screen is drawn and clicked on the window's, so a copy per thread
+// left the effect hooks reading a bare state and a point spent in the screen
+// did nothing until the next launch. These are the same on the window, its
+// server thread and a LAN host, like the mod's settings folder is.
+static STATE: std::sync::Mutex<Option<Skills>> = std::sync::Mutex::new(None);
+static TUNE: std::sync::Mutex<Option<Tune>> = std::sync::Mutex::new(None);
+/// The mod is on in Options > Mods (on until a hook first sees it off).
+static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// The old id's files were looked at this session.
+static CARRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The stored skills, or None before the first load. A poisoned lock still
+/// holds the last state written, so it is taken rather than propagated.
+fn state_slot() -> std::sync::MutexGuard<'static, Option<Skills>> {
+    STATE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn tune_slot() -> std::sync::MutexGuard<'static, Option<Tune>> {
+    TUNE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Whether the mod is on in Options > Mods, as the last hook that had a
 /// `Game` saw it. The effect hooks run where no `Game` is in reach, so they
 /// read this instead.
 pub fn set_enabled(on: bool) {
-    ENABLED.with(|c| c.set(on));
+    ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 pub fn enabled() -> bool {
-    ENABLED.with(|c| c.get())
+    ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The player's skills and the tuning, from their stored files the first time.
 /// `get` reads one of the mod's data files by key (`state`, `tuning`).
 pub fn load_once(get: impl Fn(&str) -> Option<String>) -> Skills {
-    if TUNE.with(|c| c.get()).is_none() {
+    let have_tune = tune_slot().is_some();
+    if !have_tune {
         store_tune(Tune::decode(&get("tuning").unwrap_or_default()));
     }
-    if let Some(s) = STATE.with(|c| c.borrow().clone()) {
+    if let Some(s) = state_slot().clone() {
         return s;
     }
     let s = Skills::decode(&get("state").unwrap_or_default());
@@ -788,22 +804,24 @@ pub fn load_once(get: impl Fn(&str) -> Option<String>) -> Skills {
 
 /// The skills as they are now (`Skills::default` before the first load).
 pub fn current() -> Skills {
-    STATE.with(|c| c.borrow().clone().unwrap_or_default())
+    state_slot().clone().unwrap_or_default()
 }
 
-/// Keeps the skills for this session; the caller writes the file.
+/// Keeps the skills for this session and for every thread that reads them; the
+/// caller writes the file.
 pub fn store(s: Skills) {
-    STATE.with(|c| *c.borrow_mut() = Some(s));
+    *state_slot() = Some(s);
 }
 
 /// The tuning as it is now (`Tune::default` before the first load).
 pub fn tuning() -> Tune {
-    TUNE.with(|c| c.get()).unwrap_or_default()
+    (*tune_slot()).unwrap_or_default()
 }
 
-/// Keeps the tuning for this session; the caller writes the file.
+/// Keeps the tuning for this session and for every thread that reads it; the
+/// caller writes the file.
 pub fn store_tune(t: Tune) {
-    TUNE.with(|c| c.set(Some(t)));
+    *tune_slot() = Some(t);
 }
 
 /// The files to copy from [`LEGACY_ID`] into the new folder: each of `state`
@@ -831,11 +849,11 @@ pub fn carry(
 
 /// Whether the old id's files were looked at this session.
 pub fn carried() -> bool {
-    CARRIED.with(|c| c.get())
+    CARRIED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub fn set_carried() {
-    CARRIED.with(|c| c.set(true));
+    CARRIED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 // The in-world bar and the skill screen's layout, state and click rules.
@@ -1801,6 +1819,22 @@ mod tests {
         assert_eq!(s.pump(1), 1);
         assert_eq!(s.pump(50), XP_PER_TICK);
         assert_eq!(s.bank, 3.0);
+    }
+
+    /// The screen spends on the window's thread; single player breaks blocks
+    /// on the game's server thread. The point has to be there on both, which a
+    /// copy per thread would not do.
+    #[test]
+    fn a_spent_point_reaches_the_thread_that_breaks_blocks() {
+        let mut s = Skills::default();
+        s.points = 1;
+        assert!(s.spend(Tree::Fist));
+        store(s.clone());
+        let seen = std::thread::spawn(current).join().expect("thread");
+        assert_eq!(seen.fist_tier(), 1);
+        assert_eq!(seen, s);
+        // Leave the shared state as the other tests expect to find it.
+        store(Skills::default());
     }
 
     #[test]

@@ -11,7 +11,12 @@ fn skill_trees_fist_drops(
     if value {
         return true;
     }
-    let skills = m::current();
+    // The break runs on the game's server thread, where the screen's load has
+    // not happened: read the state here (once) rather than trust `current`.
+    let skills = m::load_once(|key| {
+        game.native_setting(m::ID, key)
+            .or_else(|| game.native_setting(m::LEGACY_ID, key))
+    });
     if skills.fist_tier() == 0 {
         return false;
     }
