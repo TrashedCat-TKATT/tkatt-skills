@@ -15,6 +15,7 @@ fn skill_trees_screen_release(
     let mut state = m::screen();
     if state.banking {
         state.banking = false;
+        state.held_ticks = 0;
         m::set_screen(state);
         *canceled = true;
     }

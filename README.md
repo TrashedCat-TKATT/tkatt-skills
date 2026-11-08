@@ -25,7 +25,9 @@ MIT. Not made or endorsed by the Horizon project.
 - **Hold Bank XP** in the screen to bank experience. It takes 2 XP a tick from
   your own experience (through the vanilla `experience add` command, so levels,
   the bar and other players agree), fills the bar, and grants a **skill point**
-  every 100 XP. Letting go stops it; the bank keeps what it has.
+  every 100 XP. The longer you hold it the faster it goes: one more XP a tick
+  for every second held, up to 10 a tick. Letting go stops it and the next hold
+  starts slow again; the bank keeps what it has.
 - **`/skills`** shows the trees; **`/skills reset`** clears every tree and keeps
   your points.
 - The state is written to the mod's own settings folder
@@ -184,7 +186,7 @@ built in an instance of their own.
 
 ## Verified and not
 
-Verified here: the mod's 20 unit tests (banking, points, spending, unlocking,
+Verified here: the mod's unit tests (banking, points, spending, unlocking,
 ranking and toggling a big skill, the effect formulas and their tuning, armour
 points and the ranked Bulwark cut, the mining factor, the fist-drop rule,
 Fortune's roll and target, both storage lines, the bar's drawing, the screen's

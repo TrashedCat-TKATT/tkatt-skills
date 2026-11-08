@@ -25,6 +25,7 @@ fn skill_trees_tick(game: &mut crate::game::Game<'_>) {
         // Escape and the gamepad close the screen without telling it.
         if state.banking {
             state.banking = false;
+            state.held_ticks = 0;
             m::set_screen(state);
         }
         return;
@@ -32,13 +33,18 @@ fn skill_trees_tick(game: &mut crate::game::Game<'_>) {
     if !state.banking || !game.native_window() {
         return;
     }
+    // The longer the button is held, the more a tick takes: a fresh hold
+    // starts at the flat rate and gains one a second, up to the cap.
+    let rate = m::bank_rate(state.held_ticks);
+    state.held_ticks = state.held_ticks.saturating_add(1);
+    m::set_screen(state);
     let mut skills = m::load_once(|key| {
         game.native_setting(m::ID, key)
             .or_else(|| game.native_setting(m::LEGACY_ID, key))
     });
     let available = game.experience.total.max(0) as u32;
     let before = skills.points;
-    let taken = skills.pump(available);
+    let taken = skills.pump(available, rate);
     if taken == 0 {
         return;
     }

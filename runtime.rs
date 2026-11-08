@@ -12,13 +12,24 @@ pub const ID: &str = "tkatt_skills";
 /// on the first launch under the new id, so a rename loses no progress.
 pub const LEGACY_ID: &str = "skill_trees";
 pub const NAME: &str = "tkatt-skills";
-pub const VERSION: &str = "0.2.2";
+pub const VERSION: &str = "0.2.3";
 pub const DESCRIPTION: &str = "Bank experience into a bar for skill points, then spend them on melee damage, armour, mining with your fists, or big skills like mining speed, Fortune and Haste. A framework for skill trees.";
 
 /// One skill point per this much banked experience.
 pub const XP_PER_POINT: f32 = 100.0;
 /// Experience withdrawn from the player each tick the bar is held.
 pub const XP_PER_TICK: u32 = 2;
+/// The most a held bar takes a tick, however long it stays held.
+pub const XP_PER_TICK_MAX: u32 = 10;
+/// Ticks of holding that add one more experience a tick: twenty is a second.
+pub const BANK_RAMP_TICKS: u32 = 20;
+
+/// How much the held bar takes this tick: the flat rate plus one for every
+/// `BANK_RAMP_TICKS` it has been held, capped at `XP_PER_TICK_MAX`, so holding
+/// longer banks faster instead of at a fixed crawl.
+pub fn bank_rate(held_ticks: u32) -> u32 {
+    (XP_PER_TICK + held_ticks / BANK_RAMP_TICKS).min(XP_PER_TICK_MAX)
+}
 /// Melee damage added per level: +8%, ten levels.
 pub const MELEE_PER_LEVEL: f32 = 0.08;
 /// The share of an incoming hit the armour tree cuts per level: 0.025 is
@@ -466,11 +477,11 @@ pub struct Skills {
 }
 
 impl Skills {
-    /// Takes up to `XP_PER_TICK` of the player's `available` experience into
-    /// the bar and returns how much was taken, so the caller withdraws
-    /// exactly that. A full bar grants a point and carries the remainder.
-    pub fn pump(&mut self, available: u32) -> u32 {
-        let taken = available.min(XP_PER_TICK);
+    /// Takes up to `rate` of the player's `available` experience into the bar
+    /// and returns how much was taken, so the caller withdraws exactly that.
+    /// A full bar grants a point and carries the remainder.
+    pub fn pump(&mut self, available: u32, rate: u32) -> u32 {
+        let taken = available.min(rate);
         if taken == 0 {
             return 0;
         }
@@ -759,6 +770,7 @@ thread_local! {
             branch: Branch::Combat,
             selected: Some(MELEE_ROW),
             banking: false,
+            held_ticks: 0,
         })
     };
     /// What the screen's `&self` hooks leave for the tick to say or play.
@@ -964,6 +976,8 @@ pub struct ScreenState {
     pub selected: Option<usize>,
     /// The Bank button is held down.
     pub banking: bool,
+    /// Ticks it has been held without letting go, which speeds it up.
+    pub held_ticks: u32,
 }
 
 impl Default for ScreenState {
@@ -972,6 +986,7 @@ impl Default for ScreenState {
             branch: Branch::Combat,
             selected: Some(MELEE_ROW),
             banking: false,
+            held_ticks: 0,
         }
     }
 }
@@ -994,6 +1009,7 @@ pub fn open_screen() {
 pub fn close_screen() {
     let mut s = screen();
     s.banking = false;
+    s.held_ticks = 0;
     set_screen(s);
 }
 
@@ -1582,7 +1598,10 @@ pub fn press(v: &ScreenView, hit: ScreenHit, s: &mut Skills) -> (ScreenState, Ve
                 state.selected = Some(row);
             }
         }
-        ScreenHit::Bank => state.banking = true,
+        ScreenHit::Bank => {
+            state.banking = true;
+            state.held_ticks = 0;
+        }
         ScreenHit::Done => notes.push(Note::Close),
         ScreenHit::Action => {
             if let Some(row) = state.selected {
@@ -1813,25 +1832,25 @@ mod tests {
     #[test]
     fn banks_experience_and_grants_a_point_at_the_threshold() {
         let mut s = Skills::default();
-        assert_eq!(s.pump(2), 2);
+        assert_eq!(s.pump(2, XP_PER_TICK), 2);
         assert_eq!(s.bank, 2.0);
         // 100 xp: one point, the bar empty again.
         for _ in 0..49 {
-            s.pump(2);
+            s.pump(2, XP_PER_TICK);
         }
         assert_eq!(s.bank, 0.0);
         assert_eq!(s.points, 1);
         assert_eq!(s.spent_xp, 100);
         // Nothing left to take: nothing banked.
-        assert_eq!(s.pump(0), 0);
+        assert_eq!(s.pump(0, XP_PER_TICK), 0);
         assert_eq!(s.bank, 0.0);
     }
 
     #[test]
     fn a_tick_takes_only_the_rate_or_what_is_there() {
         let mut s = Skills::default();
-        assert_eq!(s.pump(1), 1);
-        assert_eq!(s.pump(50), XP_PER_TICK);
+        assert_eq!(s.pump(1, XP_PER_TICK), 1);
+        assert_eq!(s.pump(50, XP_PER_TICK), XP_PER_TICK);
         assert_eq!(s.bank, 3.0);
     }
 
@@ -2001,6 +2020,23 @@ mod tests {
         assert_eq!(s.press(Tree::Bulwark, false, tune), Press::Maxed);
     }
 
+    /// Holding the bar banks faster the longer it is held, up to the cap.
+    #[test]
+    fn holding_the_bar_banks_faster_the_longer_it_is_held() {
+        assert_eq!(bank_rate(0), XP_PER_TICK);
+        assert_eq!(bank_rate(BANK_RAMP_TICKS - 1), XP_PER_TICK);
+        assert_eq!(bank_rate(BANK_RAMP_TICKS), XP_PER_TICK + 1);
+        assert_eq!(bank_rate(BANK_RAMP_TICKS * 4), XP_PER_TICK + 4);
+        assert_eq!(bank_rate(10_000), XP_PER_TICK_MAX);
+        // At the cap a tick takes ten, so two points and the change after 21.
+        let mut fast = Skills::default();
+        for _ in 0..21 {
+            assert_eq!(fast.pump(1000, XP_PER_TICK_MAX), XP_PER_TICK_MAX);
+        }
+        assert_eq!(fast.points, 2);
+        assert_eq!(fast.bank, 10.0);
+    }
+
     #[test]
     fn the_bar_draws_the_fill_and_the_points() {
         let out = bar(&BarView {
@@ -2088,6 +2124,7 @@ mod tests {
             branch: Branch::Gathering,
             selected: Some(FIST_ROW),
             banking: false,
+            held_ticks: 0,
         };
         let v = ScreenView::of(&s, state, [0.0, 0.0]);
         let with = screen_shapes(&v, true);
