@@ -12,7 +12,7 @@ pub const ID: &str = "tkatt_skills";
 /// on the first launch under the new id, so a rename loses no progress.
 pub const LEGACY_ID: &str = "skill_trees";
 pub const NAME: &str = "tkatt-skills";
-pub const VERSION: &str = "0.3.0";
+pub const VERSION: &str = "0.4.0";
 pub const DESCRIPTION: &str = "Bank experience into a bar for skill points, then spend them on melee damage, armour, mining with your fists, or big skills like mining speed, Fortune and Haste. A framework for skill trees.";
 
 /// One skill point per this much banked experience.

@@ -1,6 +1,6 @@
 [mod]
 id = "tkatt_skills"
-version = "0.3.0"
+version = "0.4.0"
 priority = 100
 
 # Tested on this commit: the melee, damage and fist hooks name game functions
@@ -96,35 +96,22 @@ bindings = [
   { name = "ran", ty = "&mut bool", value = "&mut *ran" },
 ]
 
-# Melee damage: the tree scales what Player.attack computed. Nightly
-# 2026-11-13 split `game.rs` into modules, so `melee_damage` lives in
-# `game::melee` and only delegates: the damage itself is built in
-# `melee_damage_with_admission`, which is where the `amount` store is. The
-# initial store of `amount` is modified rather than the tuple return, because
-# a RETURN moves the body's exit values and newer horizon-mixins refuses the
-# closures there. Later stores are compound writes, which MODIFY_VARIABLE
-# cannot select; scaling the base amount means a critical hit multiplies the
-# tree's bonus with the rest of the hit, like a strength bonus does.
+# Melee damage: the player's weapon hit on a mob, from the server's own damage
+# event (`living_incoming_damage_v2`, API 384). The tree scales the amount the
+# target is about to lose, so a host's game applies it the way a server-side mod
+# would; the HUD and screen stay client-side.
 [[injection]]
 id = "melee"
-kind = "MODIFY_VARIABLE"
-target = "horizon_client::game::melee::Game<'_>::melee_damage_with_admission"
-variable = { name = "amount", ordinal = 0, at = "STORE" }
-require = 4
-ordinal = 0
+hook = "living_incoming_damage_v2"
+hook_version = 1
+kind = "HEAD"
 helper = "melee.rs"
 bindings = [
   { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
-  { name = "value", ty = "f32", value = "$value" },
+  { name = "causing", ty = "i32", value = "causing" },
+  { name = "amount", ty = "&mut f32", value = "&mut *amount" },
 ]
 
-# Damage the player takes. The one path that funnels a mob's hit through
-# `hurt_player_from` is scaled before it gets there; direct damage types go
-# through `hurt_player_by`, whose only damage call since Nightly 2026-11-13 is
-# `hurt_player_equipment(id, amount, ...)` — the amount is its second
-# argument. Fall, fire and the other motion events are left to vanilla: their
-# bodies carry `?`, so reducing them means cancelling and re-applying the
-# damage, which would skip any other mod's hooks inside those functions.
 [[injection]]
 id = "armor_hit"
 kind = "MODIFY_ARG"
@@ -241,29 +228,27 @@ bindings = [
   { name = "canceled", ty = "&mut bool", value = "canceled" },
 ]
 
-# Fortune: the big skill adds a drop to what the block already gave. The loot
-# list's own `drops` store is modified, because `block_loot_at`'s body contains
-# an opaque macro and RETURN refuses it.
+# Fortune: the big skill adds a drop to what the block already gave, in the
+# server's own drop event (`loot_drops`), so the extra item is a normal drop.
 [[injection]]
 id = "fortune"
-kind = "MODIFY_VARIABLE"
-target = "horizon_client::game::Game<'_>::break_block_as_player"
-variable = { name = "drops", ordinal = 0, at = "STORE" }
-require = 1
-ordinal = 0
+hook = "loot_drops"
+hook_version = 1
+kind = "HEAD"
 helper = "fortune.rs"
 bindings = [
-  { name = "value", ty = "Vec<horizon_client::items::ItemStack>", value = "$value" },
   { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
-  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "context", ty = "&horizon_client::mod_api::NativeLootDrops<'_>", value = "context" },
+  { name = "drops", ty = "&mut Vec<horizon_client::items::ItemStack>", value = "&mut *drops" },
 ]
 
 # Haste: every break grants the effect, bare hand or tool, so it hooks the break
 # itself rather than the held item's damage step.
 [[injection]]
 id = "haste"
+hook = "destroy_block"
+hook_version = 1
 kind = "HEAD"
-target = "horizon_client::game::Game<'_>::break_block_as_player"
 helper = "haste.rs"
 bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },

@@ -136,24 +136,21 @@ The bundle is a `horizon-mixins` source bundle pinned to one Horizon Nightly:
   covers it; the helpers only gather the
   game's facts and the stored `tuning`.
 
-It uses Horizon's stable hook points by name (`hud`, `key`, `tick`, `mods`,
-`settings`, `settings_click`, `command`, all API 1) and the screen hooks
-(`screen_render_post`, `screen_mouse_button_pressed_pre`,
-`screen_mouse_button_released_pre`) plus the game-function
-hooks that need the pin: `Game::melee_damage` (MODIFY_VARIABLE),
-`Game::mob_hits_player` and `Game::hurt_player_by` (MODIFY_ARG on the amount),
-and six hooks on the game's own mining code (the `progress` local and
-`speed` store in `destroy_progress`, `correct_tool`/`harvest` and the
-loot list's `drops` store in
-`break_block_as_player` for Fortune, and a HEAD on `break_block_as_player` for
-Haste). The mining hook takes the block's state id and looks the block facts up
-in the helper: Nightly 2026-11-13 holds that borrow across a mutable borrow
-inside `destroy_progress`, so the call site cannot hand the facts over. Fall,
-fire, lava and the other environmental sources
-are deliberately untouched: those bodies carry `?`, so reducing them would mean
-cancelling and re-applying the damage, which skips any other mod's hooks inside
-those functions. Armour therefore covers the two damage paths that take a value
-argument.
+It uses Horizon's stable hook points by name: `hud`, `key`, `tick`, `mods`,
+`settings`, `settings_click`, `command`, the three screen hooks, and — since
+0.4.0 — the server's own gameplay events `living_incoming_damage_v2` (melee on a
+mob), `loot_drops` (Fortune) and `destroy_block` (Haste). Those effects apply
+where the world resolves them, the way a server-side mod's would, instead of only
+in the client that owns the skills; the HUD, screen and key stay client-side, so
+each client draws its own.
+
+Five targets still name game code, which is why the bundle stays pinned: armour
+(`mob_hits_player` and `hurt_player_by`, both MODIFY_ARG on the amount), mining
+speed (the `speed` store in `destroy_progress`, whose helper takes the block's
+state id and looks the facts up itself) and the fist drops (`correct_tool` and
+`harvest` in `break_block_as_player`). The hook catalog has no break-speed or
+break-tool hook, and `living_incoming_damage` is handed no game, so the armour
+hook cannot read this mod's stored state yet: those five wait on upstream hooks.
 
 The `mods` hook (`list.rs`) gives the mod its own row in Options → Mods, and
 that page lists the screen key as a rebindable row of the same kind the Key
@@ -188,7 +185,7 @@ re-points — they are what 0.3.0 carries:
 | `armor_direct` | direct damage now goes through a helper | selector `self.hurt_player_equipment`, `argument = 1` |
 | `fist_progress_mine` | `destroy_progress` was simplified | `require = 1`; target and `speed:0` store unchanged |
 
-Everything else — the ten hooks, `armor_hit`, `fortune`, `haste` and the two
+Everything else — the ten by-name hooks, `armor_hit` and the two
 `break_block_as_player` targets — applied unchanged. 0.3.0 also carries one
 code change rather than a re-point: `mining.rs` looks the block facts up
 itself, for the borrow described above. The staged tree was not
