@@ -146,7 +146,10 @@ and six hooks on the game's own mining code (the `progress` local and
 `speed` store in `destroy_progress`, `correct_tool`/`harvest` and the
 loot list's `drops` store in
 `break_block_as_player` for Fortune, and a HEAD on `break_block_as_player` for
-Haste). Fall, fire, lava and the other environmental sources
+Haste). The mining hook takes the block's state id and looks the block facts up
+in the helper: Nightly 2026-11-13 holds that borrow across a mutable borrow
+inside `destroy_progress`, so the call site cannot hand the facts over. Fall,
+fire, lava and the other environmental sources
 are deliberately untouched: those bodies carry `?`, so reducing them would mean
 cancelling and re-applying the damage, which skips any other mod's hooks inside
 those functions. Armour therefore covers the two damage paths that take a value
@@ -159,9 +162,38 @@ Binds screen uses. K is only the default: rebind "Open skill trees" there and
 fixed table of the game's own mappings, so a mod's key lives on its page
 rather than in that list.
 
-Pinned in `compatibility.json`: Horizon `fdc87aec` (Nightly 2026-11-08) and
-horizon-mixins `5a64af9` (0.6.0). The bundle is built for the launcher's
-Nightly `fdc87ae` instance: choose it under Edit instance → Version.
+Pinned in `compatibility.json`: Horizon `9f42064` (Nightly 2026-11-13, hook
+API 415) and horizon-mixins `5a64af9` (0.6.0). The bundle is built for the
+launcher's Nightly `9f42064` instance: choose it under Edit instance → Version.
+
+### Upgrading to a new Nightly
+
+The pin is exact on purpose: `horizon-mixins` refuses a bundle built for another
+revision, so a mismatch fails loudly instead of half-working. A new Nightly is
+therefore two commands:
+
+    tools/repin.py <revision>   # writes both pins, applies, cargo checks
+    tools/bundle.py             # rebuilds dist/tkatt-skills-<version>.hnmod
+
+`repin.py` names the injection that broke and prints the re-point it knows for
+it. The by-name hooks (the ten `hook = ...` injections) have not changed across
+the revisions checked so far; the bytecode-level targets are the fragile part.
+Found on Horizon `main` `f24ee1ac` and confirmed against the 2026-11-13 Nightly
+`9f42064` (hook API 415), the whole bundle applies with three mechanical
+re-points — they are what 0.3.0 carries:
+
+| Injection | Why | Re-point |
+|---|---|---|
+| `melee` | `game.rs` split into modules and `melee_damage` now delegates | `game::melee::Game::melee_damage_with_admission`, same `amount:0` STORE, `require = 4` |
+| `armor_direct` | direct damage now goes through a helper | selector `self.hurt_player_equipment`, `argument = 1` |
+| `fist_progress_mine` | `destroy_progress` was simplified | `require = 1`; target and `speed:0` store unchanged |
+
+Everything else — the ten hooks, `armor_hit`, `fortune`, `haste` and the two
+`break_block_as_player` targets — applied unchanged. 0.3.0 also carries one
+code change rather than a re-point: `mining.rs` looks the block facts up
+itself, for the borrow described above. The staged tree was not
+compiled here (that needs `main`'s whole dependency set), so read the result as
+"the targets still line up", not as a game-tested build.
 
 ### Test it
 

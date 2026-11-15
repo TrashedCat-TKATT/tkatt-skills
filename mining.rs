@@ -6,9 +6,13 @@
 fn skill_trees_mining(
     value: f32,
     game: &crate::game::Game<'_>,
-    facts: &horizon_items::blocks::StateFacts,
+    state: &horizon_world::registry::BlockStateId,
 ) -> f32 {
     use crate::game::tkatt_skills as m;
+    // Nightly 2026-11-13 keeps a borrow of the game's block facts across a
+    // mutable borrow inside `destroy_progress`, so the call site cannot hand
+    // them over. Looking them up here keeps that borrow inside the helper.
+    let facts = game.res.facts().get(*state);
     if facts.hardness == 0.0 {
         return value;
     }
